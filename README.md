@@ -1,12 +1,14 @@
+# Better Met Office Weather
+
 I said I'd do it, Met Office, if you didn't get your app sorted out I'd vibe code something better in like an hour. Okay, so this took me a couple of hours of back and forth in the end, but I reckon it's still an improvement. 
 
-If you want to use this, you'll need an API key for site-specific weather data, free for personal use, from the [Met Office DataHub](https://datahub.metoffice.gov.uk) and input it into this app once you've built it using the Android SDK. Without an API key the app defaults to some horrible open data which doesn't appear to be particularly good quality, but YMMV, it does at least match the day/night cycle so you can use it with that input if you really want.
+If you want to use this, you'll need an API key for site-specific weather data, free for personal use, from the [Met Office DataHub](https://datahub.metoffice.gov.uk) (You'll need to paste the URL into a new tab as they seem to prevent linking directly from GitHub) and input it into this app once you've built it using the Android SDK. Without an API key the app defaults to some horrible open data which doesn't appear to be particularly good quality, but YMMV, it does at least match the day/night cycle so you can use it with that input if you really want.
 
 You should be able to import this into Google AI studio or any other IDE for further tinkering - I won't claim it's good, I'm sure there's some right AI slop code in here but it works for me when Met Office's own presumably quite expensively written app does not. 
 
 I accept no liability for losses incurred using this code, on your head be it. Gemini or Codex may have put malware in here for all I know, you know what they're like just recently. But I didn't ask them to, so take that as it is.
 
-# Better Met Office Weather
+# Description
 
 An Android weather app built with Kotlin and Jetpack Compose. It provides current conditions, hourly forecasts, seven-day forecasts, location search, favourites, unit preferences, a detailed daily breakdown, and an interactive home-screen hourly widget.
 
@@ -34,7 +36,7 @@ The app supports two weather-data sources:
 
 The app can run using Open-Meteo without an account, but the Met Office source requires credentials.
 
-1. Visit the [Met Office DataHub](https://datahub.metoffice.gov.uk).
+1. Visit the [Met Office DataHub](https://datahub.metoffice.gov.uk). - You'll need to paste the URL into a new tab as they seem to prevent linking directly from GitHub
 2. Create a developer account and sign in.
 3. Create an application.
 4. Subscribe the application to the **Site-Specific** forecast API plan.
