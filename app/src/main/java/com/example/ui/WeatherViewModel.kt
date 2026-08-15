@@ -1,0 +1,403 @@
+package com.example.ui
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.data.local.PreferencesManager
+import com.example.data.model.ApiDebugInfo
+import com.example.data.model.CoordinateTestResult
+import com.example.data.model.DailyForecastItem
+import com.example.data.model.LocationItem
+import com.example.data.model.PressureUnit
+import com.example.data.model.TemperatureUnit
+import com.example.data.model.WeatherReport
+import com.example.data.model.WindSpeedUnit
+import com.example.data.repository.ApiKeyTestResult
+import com.example.data.repository.WeatherRepository
+import com.example.widget.HourlyForecastWidget
+import androidx.glance.appwidget.updateAll
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.Locale
+
+data class WeatherUiState(
+    val weatherReport: WeatherReport? = null,
+    val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
+    val errorMessage: String? = null,
+    val selectedLocation: LocationItem = LocationItem.DEFAULT_LOCATIONS.first(),
+    val favoriteLocations: List<LocationItem> = emptyList(),
+    val searchResults: List<LocationItem> = emptyList(),
+    val isSearching: Boolean = false,
+    val searchQuery: String = "",
+    val apiKey: String = "",
+    val clientSecret: String = "",
+    val useMetOfficeSource: Boolean = true,
+    val tempUnit: TemperatureUnit = TemperatureUnit.CELSIUS,
+    val windUnit: WindSpeedUnit = WindSpeedUnit.MPH,
+    val pressureUnit: PressureUnit = PressureUnit.HPA,
+    val isSettingsOpen: Boolean = false,
+    val isApiKeyDialogOpen: Boolean = false,
+    val isLocationSheetOpen: Boolean = false,
+    val isUnitsDialogOpen: Boolean = false,
+    val apiKeyTestStatus: ApiKeyTestResult? = null,
+    val isTestingApiKey: Boolean = false,
+    val selectedDayIndex: Int = 0,
+    val selectedDayForDetail: DailyForecastItem? = null,
+    val isDayDetailSheetOpen: Boolean = false,
+    val debugInfo: ApiDebugInfo? = null,
+    val isDebugSheetOpen: Boolean = false,
+    val customLatInput: String = "51.5074",
+    val customLonInput: String = "-0.1278",
+    val coordinateTestResult: CoordinateTestResult? = null,
+    val isTestingCoordinates: Boolean = false,
+    val rawGeocodingQueryInput: String = "",
+    val rawGeocodingResultJson: String? = null,
+    val rawGeocodingLocations: List<LocationItem> = emptyList(),
+    val isTestingGeocoding: Boolean = false
+)
+
+class WeatherViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val preferencesManager = PreferencesManager(application.applicationContext)
+    private val repository = WeatherRepository(preferencesManager)
+
+    private val _uiState = MutableStateFlow(WeatherUiState())
+    val uiState: StateFlow<WeatherUiState> = _uiState.asStateFlow()
+
+    private var searchJob: Job? = null
+    private var geocodeTestJob: Job? = null
+
+    init {
+        val initialLocation = preferencesManager.getSelectedLocation()
+        val initialFavorites = preferencesManager.getFavoriteLocations()
+        val isFav = isFavoriteLocation(initialLocation, initialFavorites)
+        val initialSelectedLocation = initialLocation.copy(isFavorite = isFav)
+        val initialKey = preferencesManager.getApiKey()
+        val initialSecret = preferencesManager.getClientSecret()
+        val initialUseMetOffice = preferencesManager.isMetOfficePreferred()
+        val initialTempUnit = preferencesManager.getTemperatureUnit()
+        val initialWindUnit = preferencesManager.getWindSpeedUnit()
+        val initialPressureUnit = preferencesManager.getPressureUnit()
+
+        _uiState.update {
+            it.copy(
+                selectedLocation = initialSelectedLocation,
+                favoriteLocations = initialFavorites,
+                apiKey = initialKey,
+                clientSecret = initialSecret,
+                useMetOfficeSource = initialUseMetOffice,
+                tempUnit = initialTempUnit,
+                windUnit = initialWindUnit,
+                pressureUnit = initialPressureUnit,
+                customLatInput = String.format(Locale.US, "%.4f", initialLocation.latitude),
+                customLonInput = String.format(Locale.US, "%.4f", initialLocation.longitude)
+            )
+        }
+
+        viewModelScope.launch {
+            repository.debugInfo.collect { debugInfo ->
+                _uiState.update { it.copy(debugInfo = debugInfo) }
+            }
+        }
+
+        loadWeather(initialSelectedLocation)
+    }
+
+    private fun isFavoriteLocation(location: LocationItem, favorites: List<LocationItem>): Boolean {
+        return favorites.any {
+            it.id == location.id ||
+            (it.name.equals(location.name, ignoreCase = true) && Math.abs(it.latitude - location.latitude) < 0.05 && Math.abs(it.longitude - location.longitude) < 0.05) ||
+            (Math.abs(it.latitude - location.latitude) < 0.01 && Math.abs(it.longitude - location.longitude) < 0.01)
+        }
+    }
+
+    fun loadWeather(location: LocationItem = _uiState.value.selectedLocation, isRefresh: Boolean = false) {
+        viewModelScope.launch {
+            if (isRefresh) {
+                _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
+            } else {
+                _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            }
+
+            val isFav = isFavoriteLocation(location, _uiState.value.favoriteLocations)
+            val updatedLocation = location.copy(isFavorite = isFav)
+
+            val result = repository.getWeatherReport(updatedLocation)
+            result.onSuccess { report ->
+                _uiState.update {
+                    it.copy(
+                        weatherReport = report,
+                        selectedLocation = updatedLocation,
+                        isLoading = false,
+                        isRefreshing = false,
+                        errorMessage = null
+                    )
+                }
+                preferencesManager.setSelectedLocation(updatedLocation)
+                preferencesManager.setCachedWeatherReport(report)
+                preferencesManager.setWidgetPageOffset(0)
+                viewModelScope.launch(Dispatchers.IO) {
+                    HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isRefreshing = false,
+                        errorMessage = error.localizedMessage ?: "Unable to fetch forecast. Please check your connection."
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectLocation(location: LocationItem) {
+        val isFav = isFavoriteLocation(location, _uiState.value.favoriteLocations)
+        val updatedLocation = location.copy(isFavorite = isFav)
+        _uiState.update { it.copy(selectedLocation = updatedLocation, isLocationSheetOpen = false) }
+        loadWeather(updatedLocation)
+    }
+
+    fun searchLocations(query: String) {
+        _uiState.update { it.copy(searchQuery = query) }
+        searchJob?.cancel()
+
+        if (query.trim().length < 2) {
+            _uiState.update { it.copy(searchResults = emptyList(), isSearching = false) }
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(300) // Debounce
+            _uiState.update { it.copy(isSearching = true) }
+            val results = repository.searchLocations(query)
+            _uiState.update { it.copy(searchResults = results, isSearching = false) }
+        }
+    }
+
+    fun toggleFavorite(location: LocationItem) {
+        preferencesManager.addOrToggleFavorite(location)
+        val updatedFavorites = preferencesManager.getFavoriteLocations()
+        val isNowFavorite = isFavoriteLocation(_uiState.value.selectedLocation, updatedFavorites)
+        _uiState.update {
+            it.copy(
+                favoriteLocations = updatedFavorites,
+                selectedLocation = it.selectedLocation.copy(isFavorite = isNowFavorite)
+            )
+        }
+    }
+
+    fun setGpsLocation(latitude: Double, longitude: Double, detectedName: String? = null) {
+        val location = LocationItem(
+            id = "gps_current",
+            name = detectedName ?: "Current Location",
+            region = "GPS",
+            country = "United Kingdom",
+            latitude = latitude,
+            longitude = longitude,
+            isCurrentLocation = true
+        )
+        selectLocation(location)
+    }
+
+    fun saveApiKey(apiKey: String, clientSecret: String = "") {
+        preferencesManager.setApiKey(apiKey.trim())
+        preferencesManager.setClientSecret(clientSecret.trim())
+        _uiState.update {
+            it.copy(
+                apiKey = apiKey.trim(),
+                clientSecret = clientSecret.trim(),
+                isApiKeyDialogOpen = false,
+                apiKeyTestStatus = null
+            )
+        }
+        // Refresh forecast with new key
+        loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+    }
+
+    fun testApiKey(apiKey: String, clientSecret: String = "") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTestingApiKey = true, apiKeyTestStatus = null) }
+            val result = repository.testMetOfficeApiKey(apiKey, clientSecret)
+            _uiState.update { it.copy(isTestingApiKey = false, apiKeyTestStatus = result) }
+        }
+    }
+
+    fun openSettings() {
+        _uiState.update { it.copy(isSettingsOpen = true) }
+    }
+
+    fun closeSettings() {
+        _uiState.update { it.copy(isSettingsOpen = false) }
+    }
+
+    fun toggleDataSource(useMetOffice: Boolean) {
+        preferencesManager.setMetOfficePreferred(useMetOffice)
+        _uiState.update { it.copy(useMetOfficeSource = useMetOffice) }
+        loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+    }
+
+    fun clearApiKey() {
+        preferencesManager.setApiKey("")
+        preferencesManager.setClientSecret("")
+        _uiState.update {
+            it.copy(
+                apiKey = "",
+                clientSecret = "",
+                apiKeyTestStatus = null
+            )
+        }
+        if (_uiState.value.useMetOfficeSource) {
+            loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+        }
+    }
+
+    fun syncWidgetNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
+        }
+    }
+
+    fun openApiKeyDialog() {
+        _uiState.update { it.copy(isApiKeyDialogOpen = true, apiKeyTestStatus = null) }
+    }
+
+    fun closeApiKeyDialog() {
+        _uiState.update { it.copy(isApiKeyDialogOpen = false, apiKeyTestStatus = null) }
+    }
+
+    fun openLocationSheet() {
+        _uiState.update { it.copy(isLocationSheetOpen = true, searchQuery = "", searchResults = emptyList()) }
+    }
+
+    fun closeLocationSheet() {
+        _uiState.update { it.copy(isLocationSheetOpen = false) }
+    }
+
+    fun openUnitsDialog() {
+        _uiState.update { it.copy(isUnitsDialogOpen = true) }
+    }
+
+    fun closeUnitsDialog() {
+        _uiState.update { it.copy(isUnitsDialogOpen = false) }
+    }
+
+    fun setTemperatureUnit(unit: TemperatureUnit) {
+        preferencesManager.setTemperatureUnit(unit)
+        _uiState.update { it.copy(tempUnit = unit) }
+        viewModelScope.launch(Dispatchers.IO) {
+            HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
+        }
+    }
+
+    fun setWindSpeedUnit(unit: WindSpeedUnit) {
+        preferencesManager.setWindSpeedUnit(unit)
+        _uiState.update { it.copy(windUnit = unit) }
+    }
+
+    fun setPressureUnit(unit: PressureUnit) {
+        preferencesManager.setPressureUnit(unit)
+        _uiState.update { it.copy(pressureUnit = unit) }
+    }
+
+    fun selectForecastDay(dayIndex: Int) {
+        _uiState.update { it.copy(selectedDayIndex = dayIndex) }
+    }
+
+    fun openDayDetailSheet(day: DailyForecastItem, dayIndex: Int) {
+        _uiState.update {
+            it.copy(
+                selectedDayIndex = dayIndex,
+                selectedDayForDetail = day,
+                isDayDetailSheetOpen = true
+            )
+        }
+    }
+
+    fun closeDayDetailSheet() {
+        _uiState.update {
+            it.copy(
+                isDayDetailSheetOpen = false,
+                selectedDayForDetail = null
+            )
+        }
+    }
+
+    fun openDebugSheet() {
+        val currentLoc = _uiState.value.selectedLocation
+        _uiState.update {
+            it.copy(
+                isDebugSheetOpen = true,
+                customLatInput = String.format(Locale.US, "%.4f", currentLoc.latitude),
+                customLonInput = String.format(Locale.US, "%.4f", currentLoc.longitude)
+            )
+        }
+    }
+
+    fun closeDebugSheet() {
+        _uiState.update { it.copy(isDebugSheetOpen = false) }
+    }
+
+    fun updateCustomLat(latStr: String) {
+        _uiState.update { it.copy(customLatInput = latStr) }
+    }
+
+    fun updateCustomLon(lonStr: String) {
+        _uiState.update { it.copy(customLonInput = lonStr) }
+    }
+
+    fun nudgeCoordinates(latDelta: Double, lonDelta: Double) {
+        val currLat = _uiState.value.customLatInput.toDoubleOrNull() ?: _uiState.value.selectedLocation.latitude
+        val currLon = _uiState.value.customLonInput.toDoubleOrNull() ?: _uiState.value.selectedLocation.longitude
+        val newLat = currLat + latDelta
+        val newLon = currLon + lonDelta
+        _uiState.update {
+            it.copy(
+                customLatInput = String.format(Locale.US, "%.4f", newLat),
+                customLonInput = String.format(Locale.US, "%.4f", newLon)
+            )
+        }
+        runCoordinateTest(newLat, newLon)
+    }
+
+    fun runCoordinateTest(lat: Double? = null, lon: Double? = null) {
+        val targetLat = lat ?: _uiState.value.customLatInput.toDoubleOrNull() ?: return
+        val targetLon = lon ?: _uiState.value.customLonInput.toDoubleOrNull() ?: return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTestingCoordinates = true, coordinateTestResult = null) }
+            val result = repository.testCustomCoordinates(targetLat, targetLon)
+            _uiState.update { it.copy(isTestingCoordinates = false, coordinateTestResult = result) }
+        }
+    }
+
+    fun updateRawGeocodingQuery(query: String) {
+        _uiState.update { it.copy(rawGeocodingQueryInput = query) }
+        geocodeTestJob?.cancel()
+        if (query.trim().isBlank()) {
+            _uiState.update { it.copy(rawGeocodingResultJson = null, rawGeocodingLocations = emptyList(), isTestingGeocoding = false) }
+            return
+        }
+
+        geocodeTestJob = viewModelScope.launch {
+            delay(300)
+            _uiState.update { it.copy(isTestingGeocoding = true) }
+            val (json, locations) = repository.searchGeocodingRaw(query)
+            _uiState.update {
+                it.copy(
+                    isTestingGeocoding = false,
+                    rawGeocodingResultJson = json,
+                    rawGeocodingLocations = locations
+                )
+            }
+        }
+    }
+}
+

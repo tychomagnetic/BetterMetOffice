@@ -1,0 +1,6 @@
+{
+  "name": "Met Office Weather",
+  "description": "UK and global weather forecasts powered by the Met Office API with custom API key configuration, location search, hourly timelines, and daily forecasts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

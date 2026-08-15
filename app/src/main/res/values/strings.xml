@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Met Office Weather</string>
+    <string name="widget_name">Hourly Forecast</string>
+    <string name="widget_description">Interactive hourly forecast timeline with precipitation and conditions.</string>
+</resources>
