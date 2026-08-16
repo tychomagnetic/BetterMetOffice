@@ -26,12 +26,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.WaterDrop
@@ -255,52 +258,181 @@ fun DayHourlyDetailSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Day Overview Summary Card
+            // Day Overview Summary Card with Enhanced Top Details
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(BentoHero)
-                        .border(1.dp, BentoPurplePrimary.copy(alpha = 0.3f), RoundedCornerShape(22.dp))
-                        .padding(16.dp)
+                val dailyPrecipChance = (day.precipitationChance).coerceAtLeast(
+                    dayHourly.map { it.precipitationChance }.maxOrNull() ?: 0
+                )
+
+                val highestWindSpeed = (day.maxWindGustMph).coerceAtLeast(
+                    dayHourly.map { it.windSpeedMph }.maxOrNull() ?: 0.0
+                )
+
+                val (calculatedSunrise, calculatedSunset) = TimezoneUtils.calculateSunTimes(day.date, location)
+                val sunriseFormatted = TimezoneUtils.formatDisplaySunTime(day.sunrise ?: calculatedSunrise)
+                val sunsetFormatted = TimezoneUtils.formatDisplaySunTime(day.sunset ?: calculatedSunset)
+
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = BentoHero,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BentoPurplePrimary.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
                     ) {
-                        Column {
-                            Text(
-                                text = day.dayWeatherCode.description,
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = BentoHeroText
-                                )
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Top row: Condition, High/Low, and Icon
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "High: ${tempUnit.format(day.maxTempCelsius)}",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = BentoHeroText
+                                    text = day.dayWeatherCode.description,
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = BentoHeroText,
+                                        fontSize = 17.sp
                                     )
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Low: ${tempUnit.format(day.minTempCelsius)}",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = BentoHeroText.copy(alpha = 0.75f)
-                                    )
-                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = BentoPurplePrimary.copy(alpha = 0.15f),
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowUpward,
+                                                contentDescription = null,
+                                                tint = BentoHeroText,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "High: ${tempUnit.format(day.maxTempCelsius)}",
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = BentoHeroText,
+                                                    fontSize = 12.sp
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = BentoPurplePrimary.copy(alpha = 0.1f)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowDownward,
+                                                contentDescription = null,
+                                                tint = BentoHeroText.copy(alpha = 0.75f),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Low: ${tempUnit.format(day.minTempCelsius)}",
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = BentoHeroText.copy(alpha = 0.75f),
+                                                    fontSize = 12.sp
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
                             }
+
+                            WeatherIconView(
+                                iconType = day.dayWeatherCode.iconType,
+                                size = 48.dp
+                            )
                         }
 
-                        WeatherIconView(
-                            iconType = day.dayWeatherCode.iconType,
-                            size = 46.dp
-                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = BentoPurplePrimary.copy(alpha = 0.2f), thickness = 0.8.dp)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Grid of 4 Key Daily Highlights
+                        // Row 1: Rain Chance & Peak Wind
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Precipitation Chance
+                            DayHighlightTile(
+                                icon = Icons.Default.WaterDrop,
+                                iconTint = RainCyan,
+                                iconBg = RainCyan.copy(alpha = 0.15f),
+                                label = "RAIN CHANCE",
+                                value = "$dailyPrecipChance%",
+                                description = when {
+                                    dailyPrecipChance == 0 -> "Dry conditions"
+                                    dailyPrecipChance < 30 -> "Low risk"
+                                    dailyPrecipChance < 60 -> "Scattered showers"
+                                    else -> "Rain likely"
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            // Peak Wind / Highest Wind
+                            DayHighlightTile(
+                                icon = Icons.Default.Air,
+                                iconTint = BentoPurplePrimary,
+                                iconBg = BentoPurplePrimary.copy(alpha = 0.15f),
+                                label = "HIGHEST WIND",
+                                value = windUnit.format(highestWindSpeed),
+                                description = when {
+                                    highestWindSpeed < 10 -> "Light breeze"
+                                    highestWindSpeed < 20 -> "Moderate breeze"
+                                    highestWindSpeed < 30 -> "Fresh / Gusty"
+                                    else -> "Strong gusts"
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Row 2: Sunrise & Sunset
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Sunrise
+                            DayHighlightTile(
+                                icon = Icons.Default.WbSunny,
+                                iconTint = SolarGold,
+                                iconBg = SolarGold.copy(alpha = 0.18f),
+                                label = "SUNRISE",
+                                value = sunriseFormatted,
+                                description = "Dawn",
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            // Sunset
+                            DayHighlightTile(
+                                icon = Icons.Default.NightsStay,
+                                iconTint = androidx.compose.ui.graphics.Color(0xFF6366F1),
+                                iconBg = androidx.compose.ui.graphics.Color(0xFF6366F1).copy(alpha = 0.15f),
+                                label = "SUNSET",
+                                value = sunsetFormatted,
+                                description = "Dusk",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
 
@@ -660,6 +792,73 @@ fun DayHourlyDetailSheet(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayHighlightTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: androidx.compose.ui.graphics.Color,
+    iconBg: androidx.compose.ui.graphics.Color,
+    label: String,
+    value: String,
+    description: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = BentoCardWhite.copy(alpha = 0.65f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BentoPurplePrimary.copy(alpha = 0.15f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(iconBg),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BentoTextSecondary,
+                        letterSpacing = 0.5.sp
+                    )
+                )
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = BentoHeroText,
+                        fontSize = 13.5.sp
+                    )
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 10.5.sp,
+                        color = BentoTextSecondary.copy(alpha = 0.85f),
+                        fontWeight = FontWeight.Medium
+                    ),
+                    maxLines = 1
+                )
             }
         }
     }

@@ -76,13 +76,13 @@ class HourlyForecastWidget : GlanceAppWidget() {
             val appPrefs = PreferencesManager(context)
             val cachedReport = appPrefs.getCachedWeatherReport()
             val tempUnit = appPrefs.getTemperatureUnit()
-            val selectedLocation = appPrefs.getSelectedLocation()
+            val targetLocation = WidgetLocationHelper.getWidgetLocation(context, appPrefs)
 
             GlanceTheme {
                 HourlyForecastWidgetContent(
                     context = context,
                     report = cachedReport,
-                    selectedLocation = selectedLocation,
+                    selectedLocation = targetLocation,
                     tempUnit = tempUnit,
                     pageOffset = pageOffset
                 )
@@ -178,7 +178,7 @@ fun HourlyForecastWidgetContent(
                     )
                     Spacer(modifier = GlanceModifier.width(6.dp))
                     Text(
-                        text = if (clampedOffset > 0) "+${clampedOffset}h • $currentTemp" else "$currentTemp • $conditionDesc",
+                        text = if (clampedOffset > 0) "+${clampedOffset}h" else "$currentTemp • $conditionDesc",
                         style = TextStyle(
                             color = ColorProvider(if (clampedOffset > 0) Color(0xFFA5B4FC) else Color(0xFF94A3B8)),
                             fontSize = 10.5.sp,
@@ -193,6 +193,28 @@ fun HourlyForecastWidgetContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (allHourly.size > 5) {
+                        // "Now" Button to the left of the left arrow to jump back to present time
+                        Box(
+                            modifier = GlanceModifier
+                                .height(30.dp)
+                                .cornerRadius(15.dp)
+                                .background(ColorProvider(if (clampedOffset > 0) Color(0x33818CF8) else Color(0x15334155)))
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .clickable(actionRunCallback<ResetToNowActionCallback>()),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Now",
+                                style = TextStyle(
+                                    color = ColorProvider(if (clampedOffset > 0) Color(0xFFA5B4FC) else Color(0xFF64748B)),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = GlanceModifier.width(4.dp))
+
                         // Shift Left
                         Image(
                             provider = ImageProvider(R.drawable.ic_widget_chevron_left),
@@ -381,16 +403,17 @@ fun getWidgetWeatherIcon(weatherCode: MetOfficeWeatherCode): Int {
         WeatherIconType.CLEAR_DAY -> R.drawable.ic_widget_sunny
         WeatherIconType.CLEAR_NIGHT -> R.drawable.ic_widget_night
         WeatherIconType.PARTLY_CLOUDY_DAY -> R.drawable.ic_widget_partly_cloudy
-        WeatherIconType.PARTLY_CLOUDY_NIGHT -> R.drawable.ic_widget_night
+        WeatherIconType.PARTLY_CLOUDY_NIGHT -> R.drawable.ic_widget_partly_cloudy_night
         WeatherIconType.CLOUDY, WeatherIconType.OVERCAST -> R.drawable.ic_widget_cloudy
         WeatherIconType.MIST, WeatherIconType.FOG -> R.drawable.ic_widget_fog
         WeatherIconType.DRIZZLE -> R.drawable.ic_widget_drizzle
-        WeatherIconType.LIGHT_RAIN, WeatherIconType.RAIN_SHOWER_DAY, WeatherIconType.RAIN_SHOWER_NIGHT,
-        WeatherIconType.HEAVY_RAIN, WeatherIconType.HEAVY_RAIN_DAY, WeatherIconType.HEAVY_RAIN_NIGHT -> R.drawable.ic_widget_rain
-        WeatherIconType.SLEET, WeatherIconType.SLEET_DAY, WeatherIconType.SLEET_NIGHT,
-        WeatherIconType.HAIL, WeatherIconType.SNOW, WeatherIconType.SNOW_DAY,
-        WeatherIconType.SNOW_NIGHT, WeatherIconType.HEAVY_SNOW, WeatherIconType.HEAVY_SNOW_DAY,
-        WeatherIconType.HEAVY_SNOW_NIGHT -> R.drawable.ic_widget_snow
+        WeatherIconType.LIGHT_RAIN -> R.drawable.ic_widget_rain
+        WeatherIconType.RAIN_SHOWER_DAY -> R.drawable.ic_widget_rain_shower_day
+        WeatherIconType.RAIN_SHOWER_NIGHT -> R.drawable.ic_widget_rain_shower_night
+        WeatherIconType.HEAVY_RAIN, WeatherIconType.HEAVY_RAIN_DAY, WeatherIconType.HEAVY_RAIN_NIGHT -> R.drawable.ic_widget_heavy_rain
+        WeatherIconType.SLEET, WeatherIconType.SLEET_DAY, WeatherIconType.SLEET_NIGHT, WeatherIconType.HAIL -> R.drawable.ic_widget_sleet
+        WeatherIconType.SNOW, WeatherIconType.SNOW_DAY, WeatherIconType.SNOW_NIGHT -> R.drawable.ic_widget_snow
+        WeatherIconType.HEAVY_SNOW, WeatherIconType.HEAVY_SNOW_DAY, WeatherIconType.HEAVY_SNOW_NIGHT -> R.drawable.ic_widget_heavy_snow
         WeatherIconType.THUNDERSTORM, WeatherIconType.THUNDERSTORM_DAY, WeatherIconType.THUNDERSTORM_NIGHT -> R.drawable.ic_widget_thunderstorm
     }
 }
@@ -404,7 +427,7 @@ class RefreshWeatherActionCallback : ActionCallback {
         withContext(Dispatchers.IO) {
             try {
                 val prefs = PreferencesManager(context)
-                val location = prefs.getSelectedLocation()
+                val location = WidgetLocationHelper.getWidgetLocation(context, prefs)
                 val repository = WeatherRepository(prefs)
                 val result = repository.getWeatherReport(location)
                 result.onSuccess { report ->
@@ -414,6 +437,24 @@ class RefreshWeatherActionCallback : ActionCallback {
             } catch (_: Exception) {
             }
         }
+        updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { glancePrefs ->
+            glancePrefs.toMutablePreferences().apply {
+                this[WidgetKeys.PAGE_OFFSET] = 0
+                this[WidgetKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
+            }
+        }
+        HourlyForecastWidget().update(context, glanceId)
+    }
+}
+
+class ResetToNowActionCallback : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters
+    ) {
+        val prefs = PreferencesManager(context)
+        prefs.setWidgetPageOffset(0)
         updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { glancePrefs ->
             glancePrefs.toMutablePreferences().apply {
                 this[WidgetKeys.PAGE_OFFSET] = 0

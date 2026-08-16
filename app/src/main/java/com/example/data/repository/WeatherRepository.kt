@@ -524,8 +524,14 @@ class WeatherRepository(
 
         // Daily forecast list (7 days starting from Today)
         val dailyList = if (validDailySeries.isNotEmpty()) {
-            validDailySeries.take(7).map { item ->
-                mapMetOfficeDailyItem(item, location)
+            validDailySeries.take(7).mapIndexed { index, item ->
+                val prevItem = if (index > 0) {
+                    validDailySeries.getOrNull(index - 1)
+                } else {
+                    val currentIdx = dailySeries.indexOf(item)
+                    if (currentIdx > 0) dailySeries.getOrNull(currentIdx - 1) else null
+                }
+                mapMetOfficeDailyItem(item, prevItem, location)
             }
         } else {
             // Aggregate from combined hourly/three-hourly
@@ -540,11 +546,28 @@ class WeatherRepository(
             currentItem = currentItem
         )
 
+        // Synchronize daily summary metrics (chance of rain, min/max temp) directly with the true 24-hour hourly series for each calendar day
+        val synchronizedDailyList = dailyList.map { day ->
+            val dayHourlyItems = hourlyList.filter { it.date == day.date }
+            if (dayHourlyItems.isNotEmpty()) {
+                val maxPop = dayHourlyItems.maxOfOrNull { it.precipitationChance } ?: day.precipitationChance
+                val maxTemp = dayHourlyItems.maxOfOrNull { it.temperatureCelsius } ?: day.maxTempCelsius
+                val minTemp = dayHourlyItems.minOfOrNull { it.temperatureCelsius } ?: day.minTempCelsius
+                day.copy(
+                    precipitationChance = maxPop,
+                    maxTempCelsius = maxTemp,
+                    minTempCelsius = minTemp
+                )
+            } else {
+                day
+            }
+        }
+
         return WeatherReport(
             location = location,
             current = current,
             hourly = hourlyList,
-            daily = dailyList,
+            daily = synchronizedDailyList,
             dataSource = WeatherDataSource.MET_OFFICE_DATAHUB,
             modelRunTime = hourlyFeature?.properties?.modelRunDate
         )
@@ -573,7 +596,7 @@ class WeatherRepository(
         currentItem: MetOfficeHourlyTimeSeriesItem?
     ): List<HourlyForecastItem> {
         val result = mutableListOf<HourlyForecastItem>()
-        val existingByDate = combinedTimeSeries.groupBy { (it.time ?: "").take(10) }
+        val existingByDate = combinedTimeSeries.groupBy { TimezoneUtils.getForecastLocalDate(it.time, location) }
 
         for (day in dailyList) {
             val dateStr = day.date.take(10)
@@ -858,15 +881,24 @@ class WeatherRepository(
         return result
     }
 
-    private fun mapMetOfficeDailyItem(item: MetOfficeDailyTimeSeriesItem, location: LocationItem): DailyForecastItem {
+    private fun mapMetOfficeDailyItem(
+        item: MetOfficeDailyTimeSeriesItem,
+        prevItem: MetOfficeDailyTimeSeriesItem? = null,
+        location: LocationItem
+    ): DailyForecastItem {
         val dateStr = item.time?.take(10) ?: ""
         val dayInfo = TimezoneUtils.formatDayOfWeek(dateStr, location)
 
         val dayCode = MetOfficeWeatherCode.fromCode(item.daySignificantWeatherCode, isNightFallback = false)
         val nightCode = MetOfficeWeatherCode.fromCode(item.nightSignificantWeatherCode, isNightFallback = true)
 
-        val pop = Math.max(item.dayProbabilityOfPrecipitation ?: 0, item.nightProbabilityOfPrecipitation ?: 0)
+        // Day D's daytime pop (06:00-18:00) + early morning pop (00:00-06:00 from prev night)
+        // We do NOT attribute the next day's 00:00-06:00 night rain into day D
+        val earlyMorningPop = prevItem?.nightProbabilityOfPrecipitation ?: 0
+        val dayPop = item.dayProbabilityOfPrecipitation ?: 0
+        val pop = Math.max(dayPop, earlyMorningPop)
         val maxGustMph = (item.dayMaxScreenGustSpeed10m ?: item.dayWindSpeed10m ?: 5.0) * 2.23694
+        val sunTimes = TimezoneUtils.calculateSunTimes(dateStr, location)
 
         return DailyForecastItem(
             date = dateStr,
@@ -878,7 +910,9 @@ class WeatherRepository(
             nightWeatherCode = nightCode,
             precipitationChance = pop,
             uvIndex = item.middayUvIndex ?: 3,
-            maxWindGustMph = maxGustMph
+            maxWindGustMph = maxGustMph,
+            sunrise = sunTimes.first,
+            sunset = sunTimes.second
         )
     }
 
@@ -889,14 +923,14 @@ class WeatherRepository(
         }.format(Date())
 
         val groupedByDate = hourlySeries
-            .filter { (it.time?.take(10) ?: "") >= todayDateStr }
-            .groupBy { it.time?.take(10) ?: "today" }
+            .filter { TimezoneUtils.getForecastLocalDate(it.time, location) >= todayDateStr }
+            .groupBy { TimezoneUtils.getForecastLocalDate(it.time, location) }
 
         return groupedByDate.entries.take(7).map { entry ->
             val dateStr = entry.key
             val items = entry.value
-            val maxTemp = items.mapNotNull { it.screenTemperature }.maxOrNull() ?: 18.0
-            val minTemp = items.mapNotNull { it.screenTemperature }.minOrNull() ?: 10.0
+            val maxTemp = items.mapNotNull { extractTemp(it) }.maxOrNull() ?: 18.0
+            val minTemp = items.mapNotNull { extractTemp(it) }.minOrNull() ?: 10.0
             val maxPop = items.mapNotNull { it.probOfPrecipitation }.maxOrNull() ?: 0
             val maxUv = items.mapNotNull { it.uvIndex }.maxOrNull() ?: 3
             val maxGust = (items.mapNotNull { it.windGustSpeed10m }.maxOrNull() ?: 5.0) * 2.23694
@@ -905,6 +939,7 @@ class WeatherRepository(
             val dayCode = MetOfficeWeatherCode.fromCode(dayItem?.significantWeatherCode, false)
 
             val dayInfo = TimezoneUtils.formatDayOfWeek(dateStr, location)
+            val sunTimes = TimezoneUtils.calculateSunTimes(dateStr, location)
 
             DailyForecastItem(
                 date = dateStr,
@@ -916,7 +951,9 @@ class WeatherRepository(
                 nightWeatherCode = MetOfficeWeatherCode.CLEAR_NIGHT,
                 precipitationChance = maxPop,
                 uvIndex = maxUv,
-                maxWindGustMph = maxGust
+                maxWindGustMph = maxGust,
+                sunrise = sunTimes.first,
+                sunset = sunTimes.second
             )
         }
     }
@@ -1021,11 +1058,28 @@ class WeatherRepository(
             )
         }
 
+        // Synchronize daily list with hourly timeline
+        val synchronizedDailyList = dailyList.map { day ->
+            val dayHourlyItems = hourlyList.filter { it.date == day.date }
+            if (dayHourlyItems.isNotEmpty()) {
+                val maxPop = dayHourlyItems.maxOfOrNull { it.precipitationChance } ?: day.precipitationChance
+                val maxTemp = dayHourlyItems.maxOfOrNull { it.temperatureCelsius } ?: day.maxTempCelsius
+                val minTemp = dayHourlyItems.minOfOrNull { it.temperatureCelsius } ?: day.minTempCelsius
+                day.copy(
+                    precipitationChance = maxPop,
+                    maxTempCelsius = maxTemp,
+                    minTempCelsius = minTemp
+                )
+            } else {
+                day
+            }
+        }
+
         return WeatherReport(
             location = location,
             current = currentData,
             hourly = hourlyList,
-            daily = dailyList,
+            daily = synchronizedDailyList,
             dataSource = WeatherDataSource.OPEN_METEO_METEOROLOGICAL,
             modelRunTime = "Live Model Run"
         )

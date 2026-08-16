@@ -88,5 +88,22 @@ class ExampleRobolectricTest {
         viewModel.toggleDataSource(true)
         assertTrue(viewModel.uiState.value.useMetOfficeSource)
     }
+
+    @Test
+    fun `widget refresh interval defaults to hourly and can be updated`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = WeatherViewModel(app)
+
+        assertEquals(com.example.data.model.WidgetRefreshInterval.ONE_HOUR, viewModel.uiState.value.widgetRefreshInterval)
+
+        viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.TWO_HOURS)
+        assertEquals(com.example.data.model.WidgetRefreshInterval.TWO_HOURS, viewModel.uiState.value.widgetRefreshInterval)
+
+        viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.FOUR_HOURS)
+        assertEquals(com.example.data.model.WidgetRefreshInterval.FOUR_HOURS, viewModel.uiState.value.widgetRefreshInterval)
+
+        viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.OFF)
+        assertEquals(com.example.data.model.WidgetRefreshInterval.OFF, viewModel.uiState.value.widgetRefreshInterval)
+    }
 }
 

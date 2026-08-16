@@ -6,6 +6,7 @@ import com.example.data.model.LocationItem
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
 import com.example.data.model.WeatherReport
+import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -48,6 +49,15 @@ class PreferencesManager(context: Context) {
 
     private val _useMetOfficeSourceFlow = MutableStateFlow(isMetOfficePreferred())
     val useMetOfficeSourceFlow: StateFlow<Boolean> = _useMetOfficeSourceFlow.asStateFlow()
+
+    private val _widgetRefreshIntervalFlow = MutableStateFlow(getWidgetRefreshInterval())
+    val widgetRefreshIntervalFlow: StateFlow<WidgetRefreshInterval> = _widgetRefreshIntervalFlow.asStateFlow()
+
+    private val _widgetGpsEnabledFlow = MutableStateFlow(isWidgetGpsEnabled())
+    val widgetGpsEnabledFlow: StateFlow<Boolean> = _widgetGpsEnabledFlow.asStateFlow()
+
+    private val _widgetFixedLocationFlow = MutableStateFlow(getWidgetFixedLocation())
+    val widgetFixedLocationFlow: StateFlow<LocationItem> = _widgetFixedLocationFlow.asStateFlow()
 
     fun isMetOfficePreferred(): Boolean {
         return prefs.getBoolean(KEY_USE_MET_OFFICE, true)
@@ -192,6 +202,48 @@ class PreferencesManager(context: Context) {
         prefs.edit().putInt(KEY_WIDGET_PAGE_OFFSET, offset.coerceAtLeast(0)).apply()
     }
 
+    fun getWidgetRefreshInterval(): WidgetRefreshInterval {
+        val name = prefs.getString(KEY_WIDGET_REFRESH_INTERVAL, WidgetRefreshInterval.ONE_HOUR.name)
+        return try {
+            WidgetRefreshInterval.valueOf(name ?: WidgetRefreshInterval.ONE_HOUR.name)
+        } catch (_: Exception) {
+            WidgetRefreshInterval.ONE_HOUR
+        }
+    }
+
+    fun setWidgetRefreshInterval(interval: WidgetRefreshInterval) {
+        prefs.edit().putString(KEY_WIDGET_REFRESH_INTERVAL, interval.name).apply()
+        _widgetRefreshIntervalFlow.value = interval
+    }
+
+    fun isWidgetGpsEnabled(): Boolean {
+        // Defaults to true (GPS imprecise location on widget refresh)
+        return prefs.getBoolean(KEY_WIDGET_USE_GPS, true)
+    }
+
+    fun setWidgetGpsEnabled(useGps: Boolean) {
+        prefs.edit().putBoolean(KEY_WIDGET_USE_GPS, useGps).apply()
+        _widgetGpsEnabledFlow.value = useGps
+    }
+
+    fun getWidgetFixedLocation(): LocationItem {
+        val json = prefs.getString(KEY_WIDGET_FIXED_LOCATION, null)
+        if (json != null) {
+            try {
+                val item = locationAdapter.fromJson(json)
+                if (item != null) return item
+            } catch (_: Exception) {
+            }
+        }
+        return getSelectedLocation()
+    }
+
+    fun setWidgetFixedLocation(location: LocationItem) {
+        val json = locationAdapter.toJson(location)
+        prefs.edit().putString(KEY_WIDGET_FIXED_LOCATION, json).apply()
+        _widgetFixedLocationFlow.value = location
+    }
+
     companion object {
         private const val PREFS_NAME = "met_office_weather_prefs"
         private const val KEY_MET_OFFICE_API_KEY = "met_office_api_key"
@@ -204,5 +256,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_USE_MET_OFFICE = "use_met_office_source"
         private const val KEY_CACHED_WEATHER_REPORT = "cached_weather_report"
         private const val KEY_WIDGET_PAGE_OFFSET = "widget_page_offset"
+        private const val KEY_WIDGET_REFRESH_INTERVAL = "widget_refresh_interval"
+        private const val KEY_WIDGET_USE_GPS = "widget_use_gps"
+        private const val KEY_WIDGET_FIXED_LOCATION = "widget_fixed_location"
     }
 }

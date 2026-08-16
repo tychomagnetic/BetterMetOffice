@@ -11,10 +11,12 @@ import com.example.data.model.LocationItem
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
 import com.example.data.model.WeatherReport
+import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
 import com.example.data.repository.ApiKeyTestResult
 import com.example.data.repository.WeatherRepository
 import com.example.widget.HourlyForecastWidget
+import com.example.widget.WidgetRefreshManager
 import androidx.glance.appwidget.updateAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +44,10 @@ data class WeatherUiState(
     val tempUnit: TemperatureUnit = TemperatureUnit.CELSIUS,
     val windUnit: WindSpeedUnit = WindSpeedUnit.MPH,
     val pressureUnit: PressureUnit = PressureUnit.HPA,
+    val widgetRefreshInterval: WidgetRefreshInterval = WidgetRefreshInterval.ONE_HOUR,
+    val widgetUseGps: Boolean = true,
+    val widgetFixedLocation: LocationItem = LocationItem.DEFAULT_LOCATIONS.first(),
+    val isWidgetLocationPickerOpen: Boolean = false,
     val isSettingsOpen: Boolean = false,
     val isApiKeyDialogOpen: Boolean = false,
     val isLocationSheetOpen: Boolean = false,
@@ -85,6 +91,9 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val initialTempUnit = preferencesManager.getTemperatureUnit()
         val initialWindUnit = preferencesManager.getWindSpeedUnit()
         val initialPressureUnit = preferencesManager.getPressureUnit()
+        val initialRefreshInterval = preferencesManager.getWidgetRefreshInterval()
+        val initialWidgetUseGps = preferencesManager.isWidgetGpsEnabled()
+        val initialWidgetFixedLocation = preferencesManager.getWidgetFixedLocation()
 
         _uiState.update {
             it.copy(
@@ -96,10 +105,16 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 tempUnit = initialTempUnit,
                 windUnit = initialWindUnit,
                 pressureUnit = initialPressureUnit,
+                widgetRefreshInterval = initialRefreshInterval,
+                widgetUseGps = initialWidgetUseGps,
+                widgetFixedLocation = initialWidgetFixedLocation,
                 customLatInput = String.format(Locale.US, "%.4f", initialLocation.latitude),
                 customLonInput = String.format(Locale.US, "%.4f", initialLocation.longitude)
             )
         }
+
+        // Ensure background auto-refresh is active based on saved preference (default: 1 hour)
+        WidgetRefreshManager.scheduleAutoRefresh(application.applicationContext, initialRefreshInterval)
 
         viewModelScope.launch {
             repository.debugInfo.collect { debugInfo ->
@@ -261,8 +276,49 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     fun syncWidgetNow() {
         viewModelScope.launch(Dispatchers.IO) {
-            HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
+            val context = getApplication<Application>().applicationContext
+            WidgetRefreshManager.performWidgetRefresh(context)
         }
+    }
+
+    fun setWidgetRefreshInterval(interval: WidgetRefreshInterval) {
+        preferencesManager.setWidgetRefreshInterval(interval)
+        _uiState.update { it.copy(widgetRefreshInterval = interval) }
+        val context = getApplication<Application>().applicationContext
+        WidgetRefreshManager.scheduleAutoRefresh(context, interval)
+        if (interval != WidgetRefreshInterval.OFF) {
+            viewModelScope.launch(Dispatchers.IO) {
+                HourlyForecastWidget.updateAllWidgets(context)
+            }
+        }
+    }
+
+    fun setWidgetUseGps(useGps: Boolean) {
+        preferencesManager.setWidgetGpsEnabled(useGps)
+        _uiState.update { it.copy(widgetUseGps = useGps) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>().applicationContext
+            WidgetRefreshManager.performWidgetRefresh(context)
+        }
+    }
+
+    fun setWidgetFixedLocation(location: LocationItem) {
+        preferencesManager.setWidgetFixedLocation(location)
+        _uiState.update { it.copy(widgetFixedLocation = location, isWidgetLocationPickerOpen = false) }
+        if (!_uiState.value.widgetUseGps) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val context = getApplication<Application>().applicationContext
+                WidgetRefreshManager.performWidgetRefresh(context)
+            }
+        }
+    }
+
+    fun openWidgetLocationPicker() {
+        _uiState.update { it.copy(isWidgetLocationPickerOpen = true) }
+    }
+
+    fun closeWidgetLocationPicker() {
+        _uiState.update { it.copy(isWidgetLocationPickerOpen = false) }
     }
 
     fun openApiKeyDialog() {

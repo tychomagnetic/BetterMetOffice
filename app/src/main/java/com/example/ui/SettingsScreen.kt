@@ -48,8 +48,13 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Widgets
+import com.example.ui.components.WidgetLocationPickerDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -93,6 +98,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
+import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
 import com.example.data.repository.ApiKeyTestResult
 import com.example.ui.components.ApiDebugSheet
@@ -834,17 +840,262 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 5: Home Screen Widget Sync
+            // Section 5: Home Screen Widget Sync & Auto-Refresh
             SettingsCard(
                 title = "Home Screen Widget",
                 icon = Icons.Default.Widgets,
-                subtitle = "48-hour interactive forecast strip with 3-hour shift controls"
+                subtitle = "Configure widget location, background forecast refreshes, and sync"
             ) {
+                // Widget Location Mode (GPS vs Fixed)
                 Text(
-                    text = "The Glance widget displays 5 hourly periods with instantaneous < and > navigation and direct app launching.",
+                    text = "Widget Location",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = BentoTextPrimary
+                    )
+                )
+                Text(
+                    text = "The widget defaults to imprecise GPS location when refreshing. You can also select a fixed location.",
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = BentoTextSecondary,
-                        fontSize = 12.5.sp
+                        fontSize = 11.5.sp
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    UnitOptionButton(
+                        label = "GPS Location (Default)",
+                        selected = uiState.widgetUseGps,
+                        onClick = {
+                            viewModel.setWidgetUseGps(true)
+                            Toast.makeText(context, "Widget set to GPS location (imprecise on refresh)", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1.2f).testTag("widget_location_gps")
+                    )
+                    UnitOptionButton(
+                        label = "Fixed Location",
+                        selected = !uiState.widgetUseGps,
+                        onClick = {
+                            viewModel.setWidgetUseGps(false)
+                            Toast.makeText(context, "Widget set to fixed location: ${uiState.widgetFixedLocation.name}", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f).testTag("widget_location_fixed")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (!uiState.widgetUseGps) {
+                    // Fixed Location Selector Card
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = BentoHero,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BentoPurplePrimary.copy(alpha = 0.3f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.openWidgetLocationPicker() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(BentoPurplePrimary.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = BentoPurplePrimary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = uiState.widgetFixedLocation.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = BentoTextPrimary
+                                        )
+                                    )
+                                    Text(
+                                        text = listOfNotNull(
+                                            uiState.widgetFixedLocation.region,
+                                            uiState.widgetFixedLocation.country
+                                        ).joinToString(", ").ifEmpty { "Fixed location" },
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            color = BentoTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.openWidgetLocationPicker() },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Change", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFF1F5F9),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BentoBorder.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = null,
+                                tint = BentoPurplePrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Widget automatically resolves your approximate GPS/network position whenever it refreshes.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = BentoTextSecondary,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = BentoBorder.copy(alpha = 0.4f), thickness = 0.8.dp)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Auto-Refresh Frequency",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = BentoTextPrimary
+                    )
+                )
+                Text(
+                    text = "Automatically fetches the latest forecast in the background so your home screen widget stays current.",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = BentoTextSecondary,
+                        fontSize = 11.5.sp
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Auto-refresh interval choice buttons: Off, 1 Hour (Default), 2 Hours, 4 Hours
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    UnitOptionButton(
+                        label = "Off",
+                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.OFF,
+                        onClick = {
+                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.OFF)
+                            Toast.makeText(context, "Widget auto-refresh disabled", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f).testTag("widget_refresh_off")
+                    )
+                    UnitOptionButton(
+                        label = "1 Hour",
+                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.ONE_HOUR,
+                        onClick = {
+                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.ONE_HOUR)
+                            Toast.makeText(context, "Widget auto-refresh set to 1 hour (Default)", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_1h")
+                    )
+                    UnitOptionButton(
+                        label = "2 Hours",
+                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.TWO_HOURS,
+                        onClick = {
+                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.TWO_HOURS)
+                            Toast.makeText(context, "Widget auto-refresh set to 2 hours", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_2h")
+                    )
+                    UnitOptionButton(
+                        label = "4 Hours",
+                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.FOUR_HOURS,
+                        onClick = {
+                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.FOUR_HOURS)
+                            Toast.makeText(context, "Widget auto-refresh set to 4 hours", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_4h")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Status info box
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) Color(0xFFEDE7F6) else BentoHero,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) BentoPurplePrimary.copy(alpha = 0.4f) else BentoBorder.copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) Icons.Default.CheckCircle else Icons.Default.Info,
+                            contentDescription = null,
+                            tint = if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) BentoPurplePrimary else BentoTextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = when (uiState.widgetRefreshInterval) {
+                                WidgetRefreshInterval.OFF -> "Auto-refresh is off. Widget will only update on manual refresh or app launch."
+                                WidgetRefreshInterval.ONE_HOUR -> "Auto-refreshing hourly (Default). Keeps the 48-hour forecast updated."
+                                WidgetRefreshInterval.TWO_HOURS -> "Auto-refreshing every 2 hours in the background."
+                                WidgetRefreshInterval.FOUR_HOURS -> "Auto-refreshing every 4 hours in the background."
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) BentoPurplePrimary else BentoTextSecondary,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "The Glance widget displays 5 hourly periods with instantaneous Now, < and > navigation and direct app launching.",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = BentoTextSecondary,
+                        fontSize = 12.sp
                     )
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -895,6 +1146,18 @@ fun SettingsScreen(
                 viewModel.selectLocation(loc)
                 viewModel.closeDebugSheet()
             }
+        )
+    }
+
+    // Modal Widget Location Picker Dialog
+    if (uiState.isWidgetLocationPickerOpen) {
+        WidgetLocationPickerDialog(
+            currentLocation = uiState.widgetFixedLocation,
+            favoriteLocations = uiState.favoriteLocations,
+            onSelectLocation = { loc ->
+                viewModel.setWidgetFixedLocation(loc)
+            },
+            onDismiss = { viewModel.closeWidgetLocationPicker() }
         )
     }
 }

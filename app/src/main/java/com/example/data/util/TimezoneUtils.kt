@@ -370,4 +370,90 @@ object TimezoneUtils {
         val offsetSign = if (offsetHours >= 0) "+$offsetHours" else "$offsetHours"
         return "$shortName (UTC$offsetSign)"
     }
+
+    /**
+     * Calculates astronomical sunrise and sunset times (local 24h string HH:mm)
+     * for a given location and calendar date using the NOAA standard solar algorithm.
+     */
+    fun calculateSunTimes(dateStr: String, location: LocationItem): Pair<String, String> {
+        return try {
+            val tz = getTimeZoneForLocation(location)
+            val parts = dateStr.split("-")
+            val year = parts.getOrNull(0)?.toIntOrNull() ?: 2026
+            val month = (parts.getOrNull(1)?.toIntOrNull() ?: 1) - 1
+            val day = parts.getOrNull(2)?.toIntOrNull() ?: 1
+
+            val cal = Calendar.getInstance(tz).apply {
+                set(year, month, day, 12, 0, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val dayOfYear = cal.get(Calendar.DAY_OF_YEAR)
+
+            val lat = location.latitude
+            val lon = location.longitude
+
+            // NOAA solar algorithm
+            val gamma = 2.0 * Math.PI / 365.0 * (dayOfYear - 1 + (12.0 - 12.0) / 24.0)
+            val eqtime = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)
+                    - 0.014615 * Math.cos(2 * gamma) - 0.040849 * Math.sin(2 * gamma))
+            val decl = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
+                    - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma)
+                    - 0.002697 * Math.cos(3 * gamma) + 0.00148 * Math.sin(3 * gamma)
+
+            val latRad = Math.toRadians(lat)
+            val zenithRad = Math.toRadians(90.833) // Standard solar zenith accounting for atmospheric refraction
+
+            val cosH = (Math.cos(zenithRad) - Math.sin(latRad) * Math.sin(decl)) / (Math.cos(latRad) * Math.cos(decl))
+
+            val (sunriseMinutesUtc, sunsetMinutesUtc) = if (cosH > 1.0) {
+                Pair(720.0, 720.0) // Polar night
+            } else if (cosH < -1.0) {
+                Pair(0.0, 1440.0) // Midnight sun
+            } else {
+                val hDeg = Math.toDegrees(Math.acos(cosH))
+                val rise = 720.0 - 4.0 * (lon + hDeg) - eqtime
+                val set = 720.0 - 4.0 * (lon - hDeg) - eqtime
+                Pair(rise, set)
+            }
+
+            val offsetMillis = tz.getOffset(cal.timeInMillis)
+            val offsetMinutes = offsetMillis / (60 * 1000)
+
+            fun formatMinutes(minutesUtc: Double): String {
+                var totalMinutes = (minutesUtc + offsetMinutes).toInt()
+                while (totalMinutes < 0) totalMinutes += 1440
+                while (totalMinutes >= 1440) totalMinutes -= 1440
+                val h = totalMinutes / 60
+                val m = totalMinutes % 60
+                return String.format(Locale.US, "%02d:%02d", h, m)
+            }
+
+            Pair(formatMinutes(sunriseMinutesUtc), formatMinutes(sunsetMinutesUtc))
+        } catch (_: Exception) {
+            Pair("06:00", "20:00")
+        }
+    }
+
+    /**
+     * Formats sun time (e.g. "05:48" or "2026-08-16T05:48") into 12-hour display string (e.g. "5:48 AM").
+     */
+    fun formatDisplaySunTime(timeStr: String?): String {
+        if (timeStr.isNullOrBlank()) return "--:--"
+        val clean = timeStr.trim().takeLast(5)
+        val parts = clean.split(":")
+        if (parts.size == 2) {
+            val h = parts[0].toIntOrNull()
+            val m = parts[1].take(2).toIntOrNull()
+            if (h != null && m != null) {
+                val amPm = if (h >= 12) "PM" else "AM"
+                val h12 = when {
+                    h == 0 -> 12
+                    h > 12 -> h - 12
+                    else -> h
+                }
+                return String.format(Locale.US, "%d:%02d %s", h12, m, amPm)
+            }
+        }
+        return timeStr
+    }
 }
