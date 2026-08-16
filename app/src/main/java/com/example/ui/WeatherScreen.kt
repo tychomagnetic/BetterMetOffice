@@ -1,6 +1,8 @@
 package com.example.ui
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDone
@@ -41,6 +42,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.LocationItem
+import com.example.data.util.TimezoneUtils
 import com.example.ui.components.ApiDebugSheet
 import com.example.ui.components.ApiKeyDialog
 import com.example.ui.components.DailyForecastCard
@@ -58,6 +61,9 @@ import com.example.ui.theme.BentoHeroText
 import com.example.ui.theme.BentoPurplePrimary
 import com.example.ui.theme.BentoTextPrimary
 import com.example.ui.theme.BentoTextSecondary
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun WeatherScreen(
@@ -98,14 +104,15 @@ fun WeatherScreen(
                     location = uiState.selectedLocation,
                     isFavorite = isSelectedLocFavorite,
                     dataSource = report?.dataSource,
-                    useMetOfficeSource = uiState.useMetOfficeSource,
+                    forecastSource = uiState.forecastSource,
                     hasApiKey = uiState.apiKey.isNotBlank(),
+                    hasBpfApiKey = uiState.bpfApiKey.isNotBlank(),
                     isRefreshing = uiState.isRefreshing,
                     onLocationClick = { viewModel.openLocationSheet() },
                     onFavoriteToggle = { viewModel.toggleFavorite(uiState.selectedLocation) },
                     onSearchClick = { viewModel.openLocationSheet() },
                     onSettingsClick = { viewModel.openSettings() },
-                    onDataSourceToggle = { useMetOffice -> viewModel.toggleDataSource(useMetOffice) },
+                    onDataSourceSelect = { source -> viewModel.selectForecastSource(source) },
                     onRefresh = { viewModel.loadWeather(isRefresh = true) }
                 )
 
@@ -170,101 +177,102 @@ fun WeatherScreen(
                         }
                     }
                 } else if (report != null) {
-                    LazyColumn(
+                    val heroPresentation = buildHeroWeatherPresentation(
+                        report = report,
+                        selectedDayIndex = uiState.selectedDayIndex
+                    )
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
+                            .verticalScroll(rememberScrollState())
                     ) {
                         // Hero Card (Current Temp, Condition, High/Low)
-                        item {
-                            HeroWeatherCard(
-                                current = report.current,
-                                tempUnit = uiState.tempUnit,
-                                windUnit = uiState.windUnit
-                            )
-                        }
+                        HeroWeatherCard(
+                            current = heroPresentation.weather,
+                            periodLabel = heroPresentation.periodLabel,
+                            rainLabel = heroPresentation.rainLabel,
+                            tempUnit = uiState.tempUnit,
+                            windUnit = uiState.windUnit
+                        )
 
                         // Hourly Forecast Timeline (Interactive day selection & scrolling)
-                        item {
-                            HourlyForecastRow(
-                                dailyList = report.daily,
-                                hourlyList = report.hourly,
-                                selectedDayIndex = uiState.selectedDayIndex,
-                                onSelectDay = { viewModel.selectForecastDay(it) },
-                                tempUnit = uiState.tempUnit,
-                                windUnit = uiState.windUnit,
-                                location = report.location,
-                                onOpenDetailSheet = {
-                                    report.daily.getOrNull(uiState.selectedDayIndex)?.let { day ->
-                                        viewModel.openDayDetailSheet(day, uiState.selectedDayIndex)
-                                    }
-                                }
-                            )
-                        }
-
-                        // 7-Day Forecast Card (Clickable rows with detail trigger)
-                        item {
-                            DailyForecastCard(
-                                dailyList = report.daily,
-                                tempUnit = uiState.tempUnit,
-                                selectedDayIndex = uiState.selectedDayIndex,
-                                onDayClick = { index, day ->
-                                    viewModel.openDayDetailSheet(day, index)
-                                }
-                            )
-                        }
-
-                        // Detailed Meteorological Metrics Grid
-                        item {
-                            val todayDaily = report.daily.firstOrNull()
-                            WeatherMetricsGrid(
-                                current = report.current,
-                                windUnit = uiState.windUnit,
-                                pressureUnit = uiState.pressureUnit,
-                                sunrise = todayDaily?.sunrise,
-                                sunset = todayDaily?.sunset
-                            )
-                        }
-
-                        // Attribution & Model Run Footer
-                        item {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 20.dp, horizontal = 24.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CloudDone,
-                                        contentDescription = null,
-                                        tint = BentoPurplePrimary.copy(alpha = 0.8f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Data Source: ${report.dataSource.displayName}",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = BentoTextSecondary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    )
-                                }
-                                if (!report.modelRunTime.isNullOrBlank()) {
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Model Run: ${report.modelRunTime}",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = BentoTextSecondary.copy(alpha = 0.7f),
-                                            fontSize = 10.sp
-                                        )
-                                    )
+                        HourlyForecastRow(
+                            dailyList = report.daily,
+                            hourlyList = report.hourly,
+                            selectedDayIndex = uiState.selectedDayIndex,
+                            onSelectDay = { viewModel.selectForecastDay(it) },
+                            tempUnit = uiState.tempUnit,
+                            windUnit = uiState.windUnit,
+                            location = report.location,
+                            onOpenDetailSheet = {
+                                report.daily.getOrNull(uiState.selectedDayIndex)?.let { day ->
+                                    viewModel.openDayDetailSheet(day, uiState.selectedDayIndex)
                                 }
                             }
+                        )
+
+                        // 7-Day Forecast Card (Clickable rows with detail trigger)
+                        DailyForecastCard(
+                            dailyList = report.daily,
+                            tempUnit = uiState.tempUnit,
+                            selectedDayIndex = uiState.selectedDayIndex,
+                            onDayClick = { index, day ->
+                                viewModel.openDayDetailSheet(day, index)
+                            }
+                        )
+
+                        // Detailed Meteorological Metrics Grid
+                        val todayDaily = report.daily.firstOrNull()
+                        WeatherMetricsGrid(
+                            current = report.current,
+                            windUnit = uiState.windUnit,
+                            pressureUnit = uiState.pressureUnit,
+                            sunrise = todayDaily?.sunrise,
+                            sunset = todayDaily?.sunset
+                        )
+
+                        // Attribution & Model Run Footer
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 20.dp, horizontal = 24.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = BentoPurplePrimary.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Data Source: ${report.dataSource.displayName}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = BentoTextSecondary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                )
+                            }
+                            val modelRunMillis = TimezoneUtils.parseIsoToMillis(report.modelRunTime)
+                            val timestampMillis = modelRunMillis ?: report.fetchedAtMillis
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (modelRunMillis != null) {
+                                    "Model run: ${formatFooterTimestamp(timestampMillis, report.location)}"
+                                } else {
+                                    "Data updated: ${formatFooterTimestamp(timestampMillis, report.location)}"
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = BentoTextSecondary.copy(alpha = 0.7f),
+                                    fontSize = 10.sp
+                                )
+                            )
                         }
                     }
                 } else {
@@ -400,4 +408,10 @@ fun WeatherScreen(
             )
         }
     }
+}
+
+private fun formatFooterTimestamp(timestampMillis: Long, location: LocationItem): String {
+    return SimpleDateFormat("EEE d MMM, h:mm a z", Locale.getDefault()).apply {
+        timeZone = TimezoneUtils.getTimeZoneForLocation(location)
+    }.format(Date(timestampMillis))
 }

@@ -32,6 +32,44 @@ class TimezoneUtilsTest {
     }
 
     @Test
+    fun `test UK DST boundaries convert UTC forecast hours correctly`() {
+        val londonLocation = LocationItem(
+            id = "london",
+            name = "London",
+            latitude = 51.5074,
+            longitude = -0.1278,
+            country = "United Kingdom",
+            timezone = "Europe/London"
+        )
+
+        // Clocks move forward at 01:00Z on 29 March 2026, so local 1 AM is skipped.
+        val springHours = listOf(
+            "2026-03-29T00:00:00Z",
+            "2026-03-29T01:00:00Z",
+            "2026-03-29T02:00:00Z"
+        )
+        assertEquals(
+            listOf("12 AM", "2 AM", "3 AM"),
+            springHours.map { TimezoneUtils.formatHourLabel(it, londonLocation) }
+        )
+
+        // Clocks move back at 01:00Z on 25 October 2026, so local 1 AM occurs twice.
+        // The two labels are identical, but remain distinct consecutive UTC instants.
+        val autumnHours = listOf(
+            "2026-10-25T00:00:00Z",
+            "2026-10-25T01:00:00Z",
+            "2026-10-25T02:00:00Z"
+        )
+        assertEquals(
+            listOf("1 AM", "1 AM", "2 AM"),
+            autumnHours.map { TimezoneUtils.formatHourLabel(it, londonLocation) }
+        )
+        val autumnMillis = autumnHours.map { TimezoneUtils.parseIsoToMillis(it)!! }
+        assertEquals(60 * 60 * 1000L, autumnMillis[1] - autumnMillis[0])
+        assertEquals(60 * 60 * 1000L, autumnMillis[2] - autumnMillis[1])
+    }
+
+    @Test
     fun `test US Eastern Time EDT and EST conversion`() {
         val newYorkLocation = LocationItem(
             id = "nyc",

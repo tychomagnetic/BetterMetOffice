@@ -191,8 +191,16 @@ data class WeatherReport(
 
 enum class WeatherDataSource(val displayName: String, val isOfficialMetOffice: Boolean) {
     MET_OFFICE_DATAHUB("Met Office DataHub API (Site-Specific)", true),
+    MET_OFFICE_BPF("Met Office BPF Advanced Model", true),
     MET_OFFICE_DATAPOINT("Met Office DataPoint API", true),
     OPEN_METEO_METEOROLOGICAL("Meteorological Unified Model (Demo)", false)
+}
+
+/** The source selected in Settings. Kept separate from [WeatherDataSource], which describes a report. */
+enum class ForecastSource {
+    MET_OFFICE_SPOT,
+    MET_OFFICE_BPF,
+    OPEN_METEO
 }
 
 enum class TemperatureUnit(val symbol: String) {

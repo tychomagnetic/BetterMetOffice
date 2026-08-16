@@ -7,9 +7,11 @@ import com.example.data.local.PreferencesManager
 import com.example.data.model.ApiDebugInfo
 import com.example.data.model.CoordinateTestResult
 import com.example.data.model.DailyForecastItem
+import com.example.data.model.ForecastSource
 import com.example.data.model.LocationItem
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
+import com.example.data.model.WeatherDataSource
 import com.example.data.model.WeatherReport
 import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
@@ -39,8 +41,10 @@ data class WeatherUiState(
     val isSearching: Boolean = false,
     val searchQuery: String = "",
     val apiKey: String = "",
+    val bpfApiKey: String = "",
     val clientSecret: String = "",
     val useMetOfficeSource: Boolean = true,
+    val forecastSource: ForecastSource = ForecastSource.MET_OFFICE_SPOT,
     val tempUnit: TemperatureUnit = TemperatureUnit.CELSIUS,
     val windUnit: WindSpeedUnit = WindSpeedUnit.MPH,
     val pressureUnit: PressureUnit = PressureUnit.HPA,
@@ -54,6 +58,8 @@ data class WeatherUiState(
     val isUnitsDialogOpen: Boolean = false,
     val apiKeyTestStatus: ApiKeyTestResult? = null,
     val isTestingApiKey: Boolean = false,
+    val bpfApiKeyTestStatus: ApiKeyTestResult? = null,
+    val isTestingBpfApiKey: Boolean = false,
     val selectedDayIndex: Int = 0,
     val selectedDayForDetail: DailyForecastItem? = null,
     val isDayDetailSheetOpen: Boolean = false,
@@ -73,6 +79,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     private val preferencesManager = PreferencesManager(application.applicationContext)
     private val repository = WeatherRepository(preferencesManager)
+    private val bpfCacheMaxAgeMillis = 2L * 60L * 60L * 1000L
 
     private val _uiState = MutableStateFlow(WeatherUiState())
     val uiState: StateFlow<WeatherUiState> = _uiState.asStateFlow()
@@ -86,12 +93,21 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val isFav = isFavoriteLocation(initialLocation, initialFavorites)
         val initialSelectedLocation = initialLocation.copy(isFavorite = isFav)
         val initialKey = preferencesManager.getApiKey()
+        val initialBpfKey = preferencesManager.getBpfApiKey()
         val initialSecret = preferencesManager.getClientSecret()
-        val initialUseMetOffice = preferencesManager.isMetOfficePreferred()
+        val initialForecastSource = preferencesManager.getForecastSource()
         val initialTempUnit = preferencesManager.getTemperatureUnit()
         val initialWindUnit = preferencesManager.getWindSpeedUnit()
         val initialPressureUnit = preferencesManager.getPressureUnit()
-        val initialRefreshInterval = preferencesManager.getWidgetRefreshInterval()
+        val savedRefreshInterval = preferencesManager.getWidgetRefreshInterval()
+        val initialRefreshInterval = if (savedRefreshInterval == WidgetRefreshInterval.OFF) {
+            WidgetRefreshInterval.OFF
+        } else {
+            WidgetRefreshInterval.ONE_HOUR
+        }
+        if (savedRefreshInterval != initialRefreshInterval) {
+            preferencesManager.setWidgetRefreshInterval(initialRefreshInterval)
+        }
         val initialWidgetUseGps = preferencesManager.isWidgetGpsEnabled()
         val initialWidgetFixedLocation = preferencesManager.getWidgetFixedLocation()
 
@@ -100,8 +116,10 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 selectedLocation = initialSelectedLocation,
                 favoriteLocations = initialFavorites,
                 apiKey = initialKey,
+                bpfApiKey = initialBpfKey,
                 clientSecret = initialSecret,
-                useMetOfficeSource = initialUseMetOffice,
+                useMetOfficeSource = initialForecastSource != ForecastSource.OPEN_METEO,
+                forecastSource = initialForecastSource,
                 tempUnit = initialTempUnit,
                 windUnit = initialWindUnit,
                 pressureUnit = initialPressureUnit,
@@ -133,7 +151,11 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun loadWeather(location: LocationItem = _uiState.value.selectedLocation, isRefresh: Boolean = false) {
+    fun loadWeather(
+        location: LocationItem = _uiState.value.selectedLocation,
+        isRefresh: Boolean = false,
+        useFreshBpfCache: Boolean = !isRefresh
+    ) {
         viewModelScope.launch {
             if (isRefresh) {
                 _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
@@ -144,23 +166,20 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             val isFav = isFavoriteLocation(location, _uiState.value.favoriteLocations)
             val updatedLocation = location.copy(isFavorite = isFav)
 
+            if (useFreshBpfCache && _uiState.value.forecastSource == ForecastSource.MET_OFFICE_BPF) {
+                val cachedReport = preferencesManager.getFreshCachedBpfWeatherReport(
+                    location = updatedLocation,
+                    maxAgeMillis = bpfCacheMaxAgeMillis
+                )
+                if (cachedReport != null) {
+                    applyWeatherReport(cachedReport.copy(location = updatedLocation), updatedLocation)
+                    return@launch
+                }
+            }
+
             val result = repository.getWeatherReport(updatedLocation)
             result.onSuccess { report ->
-                _uiState.update {
-                    it.copy(
-                        weatherReport = report,
-                        selectedLocation = updatedLocation,
-                        isLoading = false,
-                        isRefreshing = false,
-                        errorMessage = null
-                    )
-                }
-                preferencesManager.setSelectedLocation(updatedLocation)
-                preferencesManager.setCachedWeatherReport(report)
-                preferencesManager.setWidgetPageOffset(0)
-                viewModelScope.launch(Dispatchers.IO) {
-                    HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
-                }
+                applyWeatherReport(report, updatedLocation)
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
@@ -170,6 +189,27 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
             }
+        }
+    }
+
+    private fun applyWeatherReport(report: WeatherReport, location: LocationItem) {
+        _uiState.update {
+            it.copy(
+                weatherReport = report,
+                selectedLocation = location,
+                isLoading = false,
+                isRefreshing = false,
+                errorMessage = null
+            )
+        }
+        preferencesManager.setSelectedLocation(location)
+        preferencesManager.setCachedWeatherReport(report)
+        if (report.dataSource == WeatherDataSource.MET_OFFICE_BPF) {
+            preferencesManager.setCachedBpfWeatherReport(report)
+        }
+        preferencesManager.setWidgetPageOffset(0)
+        viewModelScope.launch(Dispatchers.IO) {
+            HourlyForecastWidget.updateAllWidgets(getApplication<Application>().applicationContext)
         }
     }
 
@@ -245,6 +285,30 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun saveBpfApiKey(apiKey: String) {
+        preferencesManager.setBpfApiKey(apiKey.trim())
+        _uiState.update { it.copy(bpfApiKey = apiKey.trim(), bpfApiKeyTestStatus = null) }
+        if (_uiState.value.forecastSource == ForecastSource.MET_OFFICE_BPF) {
+            loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+        }
+    }
+
+    fun testBpfApiKey(apiKey: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTestingBpfApiKey = true, bpfApiKeyTestStatus = null) }
+            val result = repository.testBpfApiKey(apiKey)
+            _uiState.update { it.copy(isTestingBpfApiKey = false, bpfApiKeyTestStatus = result) }
+        }
+    }
+
+    fun clearBpfApiKey() {
+        preferencesManager.setBpfApiKey("")
+        _uiState.update { it.copy(bpfApiKey = "", bpfApiKeyTestStatus = null) }
+        if (_uiState.value.forecastSource == ForecastSource.MET_OFFICE_BPF) {
+            loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+        }
+    }
+
     fun openSettings() {
         _uiState.update { it.copy(isSettingsOpen = true) }
     }
@@ -254,9 +318,22 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleDataSource(useMetOffice: Boolean) {
-        preferencesManager.setMetOfficePreferred(useMetOffice)
-        _uiState.update { it.copy(useMetOfficeSource = useMetOffice) }
-        loadWeather(_uiState.value.selectedLocation, isRefresh = true)
+        selectForecastSource(if (useMetOffice) ForecastSource.MET_OFFICE_SPOT else ForecastSource.OPEN_METEO)
+    }
+
+    fun selectForecastSource(source: ForecastSource) {
+        preferencesManager.setForecastSource(source)
+        _uiState.update {
+            it.copy(
+                forecastSource = source,
+                useMetOfficeSource = source != ForecastSource.OPEN_METEO
+            )
+        }
+        loadWeather(
+            _uiState.value.selectedLocation,
+            isRefresh = true,
+            useFreshBpfCache = source == ForecastSource.MET_OFFICE_BPF
+        )
     }
 
     fun clearApiKey() {
@@ -269,7 +346,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 apiKeyTestStatus = null
             )
         }
-        if (_uiState.value.useMetOfficeSource) {
+        if (_uiState.value.forecastSource == ForecastSource.MET_OFFICE_SPOT) {
             loadWeather(_uiState.value.selectedLocation, isRefresh = true)
         }
     }
@@ -282,11 +359,16 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setWidgetRefreshInterval(interval: WidgetRefreshInterval) {
-        preferencesManager.setWidgetRefreshInterval(interval)
-        _uiState.update { it.copy(widgetRefreshInterval = interval) }
+        val effectiveInterval = if (interval == WidgetRefreshInterval.OFF) {
+            WidgetRefreshInterval.OFF
+        } else {
+            WidgetRefreshInterval.ONE_HOUR
+        }
+        preferencesManager.setWidgetRefreshInterval(effectiveInterval)
+        _uiState.update { it.copy(widgetRefreshInterval = effectiveInterval) }
         val context = getApplication<Application>().applicationContext
-        WidgetRefreshManager.scheduleAutoRefresh(context, interval)
-        if (interval != WidgetRefreshInterval.OFF) {
+        WidgetRefreshManager.scheduleAutoRefresh(context, effectiveInterval)
+        if (effectiveInterval != WidgetRefreshInterval.OFF) {
             viewModelScope.launch(Dispatchers.IO) {
                 HourlyForecastWidget.updateAllWidgets(context)
             }
@@ -456,4 +538,3 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 }
-

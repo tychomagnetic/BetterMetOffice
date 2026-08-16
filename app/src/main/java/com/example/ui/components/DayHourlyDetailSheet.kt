@@ -5,9 +5,11 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,9 +50,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -80,7 +88,7 @@ import com.example.ui.theme.BentoTile
 import com.example.ui.theme.RainCyan
 import com.example.ui.theme.SolarGold
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DayHourlyDetailSheet(
     dailyList: List<DailyForecastItem>,
@@ -97,8 +105,16 @@ fun DayHourlyDetailSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val currentDayIndex = selectedDayIndex.coerceIn(0, (dailyList.size - 1).coerceAtLeast(0))
     val day = dailyList.getOrNull(currentDayIndex) ?: return
+    val daySelectorState = rememberLazyListState()
+
+    LaunchedEffect(currentDayIndex) {
+        daySelectorState.animateScrollToItem((currentDayIndex - 1).coerceAtLeast(0))
+    }
 
     var expandedHourKey by remember(currentDayIndex) { mutableStateOf<String?>(null) }
+    // This is a viewing preference for the open sheet, so retain it while the
+    // user moves between days by either swiping or tapping the day selector.
+    var showAllHourDetails by remember { mutableStateOf(false) }
 
     val targetDate = day.date.take(10)
     val dayHourly = allHourlyList.filter {
@@ -146,117 +162,156 @@ fun DayHourlyDetailSheet(
     ) {
         LazyColumn(
             modifier = Modifier
+                .fillMaxHeight()
                 .fillMaxWidth()
+                .pointerInput(currentDayIndex, dailyList.size) {
+                    var horizontalDragDistance = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { horizontalDragDistance = 0f },
+                        onDragCancel = { horizontalDragDistance = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            horizontalDragDistance += dragAmount
+                        },
+                        onDragEnd = {
+                            val swipeThreshold = size.width * 0.16f
+                            val newIndex = when {
+                                horizontalDragDistance <= -swipeThreshold -> currentDayIndex + 1
+                                horizontalDragDistance >= swipeThreshold -> currentDayIndex - 1
+                                else -> currentDayIndex
+                            }.coerceIn(dailyList.indices)
+
+                            if (newIndex != currentDayIndex) onSelectDay(newIndex)
+                            horizontalDragDistance = 0f
+                        }
+                    )
+                }
                 .padding(horizontal = 20.dp),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
-            // Header: Title & Close Button
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
+            // Keep the current day and navigation visible while the forecast
+            // content scrolls beneath it.
+            stickyHeader {
+                Surface(
+                    shape = RoundedCornerShape(
+                        topStart = 0.dp,
+                        topEnd = 0.dp,
+                        bottomEnd = 18.dp,
+                        bottomStart = 18.dp
+                    ),
+                    color = BentoTile,
+                    shadowElevation = 5.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("sticky_day_detail_header")
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(BentoPurplePrimary.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CalendarToday,
-                                contentDescription = null,
-                                tint = BentoPurplePrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "${day.dayOfWeek} Hourly Forecast",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = BentoTextPrimary
-                                )
-                            )
-                            Text(
-                                text = "${day.dateFormatted} (${dayHourly.size} hours)",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = BentoTextSecondary,
-                                    fontSize = 12.sp
-                                )
-                            )
-                        }
-                    }
-
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.testTag("close_day_detail_sheet")
+                    Column(
+                        modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = BentoTextSecondary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-            }
-
-            // Day Selector Pill Strip
-            item {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    items(dailyList.size) { index ->
-                        val item = dailyList[index]
-                        val isSelected = index == currentDayIndex
-                        Surface(
-                            onClick = { onSelectDay(index) },
-                            shape = RoundedCornerShape(16.dp),
-                            color = if (isSelected) BentoPurplePrimary else BentoCardWhite,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isSelected) BentoPurplePrimary else BentoBorder.copy(alpha = 0.6f)
-                            ),
-                            modifier = Modifier.testTag("detail_day_pill_$index")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                val label = when (item.dayOfWeek) {
-                                    "Today" -> "Today"
-                                    "Tomorrow" -> "Tomorrow"
-                                    "Yesterday" -> "Yesterday"
-                                    else -> item.dayOfWeek.take(3)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(BentoPurplePrimary.copy(alpha = 0.12f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CalendarToday,
+                                        contentDescription = null,
+                                        tint = BentoPurplePrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) Color.White else BentoTextPrimary
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "${day.dayOfWeek} Hourly Forecast",
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = BentoTextPrimary
+                                        )
                                     )
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "${tempUnit.convert(item.maxTempCelsius).toInt()}°",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) Color.White.copy(alpha = 0.85f) else BentoTextSecondary
+                                    Text(
+                                        text = "${day.dateFormatted} (${dayHourly.size} hours)",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            color = BentoTextSecondary,
+                                            fontSize = 12.sp
+                                        )
                                     )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.testTag("close_day_detail_sheet")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = BentoTextSecondary
                                 )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        LazyRow(
+                            state = daySelectorState,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(dailyList.size) { index ->
+                                val item = dailyList[index]
+                                val isSelected = index == currentDayIndex
+                                Surface(
+                                    onClick = { onSelectDay(index) },
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (isSelected) BentoPurplePrimary else BentoCardWhite,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isSelected) BentoPurplePrimary else BentoBorder.copy(alpha = 0.6f)
+                                    ),
+                                    modifier = Modifier.testTag("detail_day_pill_$index")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        val label = when (item.dayOfWeek) {
+                                            "Today" -> "Today"
+                                            "Tomorrow" -> "Tomorrow"
+                                            "Yesterday" -> "Yesterday"
+                                            else -> item.dayOfWeek.take(3)
+                                        }
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) Color.White else BentoTextPrimary
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "${tempUnit.convert(item.maxTempCelsius).toInt()}°",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else BentoTextSecondary
+                                            )
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
+
+            item { Spacer(modifier = Modifier.height(16.dp)) }
 
             // Day Overview Summary Card with Enhanced Top Details
             item {
@@ -439,65 +494,63 @@ fun DayHourlyDetailSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Horizontal Hourly Scroll Header
+            // Detailed Hour-by-Hour List Breakdown
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Schedule,
-                        contentDescription = null,
-                        tint = BentoPurplePrimary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "HOURLY TIMELINE (${dayHourly.size} HOURS)",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = BentoTextSecondary,
-                            letterSpacing = 1.sp,
-                            fontSize = 11.sp
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = BentoPurplePrimary,
+                            modifier = Modifier.size(16.dp)
                         )
-                    )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "HOURLY BREAKDOWN (${dayHourly.size} HOURS)",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = BentoTextSecondary,
+                                letterSpacing = 1.sp,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "ALL DETAILS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (showAllHourDetails) BentoPurplePrimary else BentoTextSecondary,
+                                fontSize = 9.5.sp
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Switch(
+                            checked = showAllHourDetails,
+                            onCheckedChange = { showAllHourDetails = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = BentoPurplePrimary,
+                                uncheckedThumbColor = BentoTextSecondary,
+                                uncheckedTrackColor = BentoCardWhite,
+                                uncheckedBorderColor = BentoBorder
+                            ),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .testTag("toggle_all_hour_details")
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // Horizontal Hourly Cards
             item {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    items(
-                        items = dayHourly,
-                        key = { "sheet_${it.date}_${it.fullTime}_${it.timeLabel}" }
-                    ) { item ->
-                        HourlyItemCard(
-                            item = item,
-                            tempUnit = tempUnit,
-                            windUnit = windUnit
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // Detailed Hour-by-Hour List Breakdown
-            item {
-                Text(
-                    text = "Detailed Breakdown",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = BentoTextPrimary
-                    ),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -509,7 +562,7 @@ fun DayHourlyDetailSheet(
                     Column(modifier = Modifier.fillMaxWidth()) {
                         dayHourly.forEachIndexed { index, item ->
                             val rowKey = "${item.date}_${item.fullTime}_${item.timeLabel}_$index"
-                            val isExpanded = (expandedHourKey == rowKey)
+                            val isExpanded = showAllHourDetails || (expandedHourKey == rowKey)
 
                             Column(
                                 modifier = Modifier

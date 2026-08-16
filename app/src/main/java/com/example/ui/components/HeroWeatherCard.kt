@@ -41,6 +41,8 @@ import com.example.ui.theme.RainCyan
 @Composable
 fun HeroWeatherCard(
     current: CurrentWeather,
+    periodLabel: String = "Now",
+    rainLabel: String = "Rain now",
     tempUnit: TemperatureUnit,
     windUnit: WindSpeedUnit,
     modifier: Modifier = Modifier
@@ -76,6 +78,16 @@ fun HeroWeatherCard(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
+                        Text(
+                            text = periodLabel.uppercase(),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = BentoHeroText.copy(alpha = 0.7f),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                letterSpacing = 0.5.sp
+                            ),
+                            maxLines = 1
+                        )
                         Text(
                             text = current.weatherCode.description,
                             style = MaterialTheme.typography.titleMedium.copy(
@@ -161,7 +173,7 @@ fun HeroWeatherCard(
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "${current.precipitationChance}% Rain",
+                        text = "${current.precipitationChance}% $rainLabel",
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = if (isHighPrecip) FontWeight.Bold else FontWeight.SemiBold,
                             color = BentoHeroText,
@@ -200,4 +212,3 @@ fun HeroWeatherCard(
         }
     }
 }
-

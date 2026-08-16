@@ -344,15 +344,21 @@ private fun LocationSummaryCard(
                     )
                 }
 
+                val isBpf = debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_BPF
+                val isMetOfficeSource = debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB || isBpf
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = if (debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB) Color(0xFFE8F5E9) else BentoHero
+                    color = if (isMetOfficeSource) Color(0xFFE8F5E9) else BentoHero
                 ) {
                     Text(
-                        text = if (debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB) "Met Office DataHub" else "Open-Meteo Model",
+                        text = when {
+                            isBpf -> "Met Office BPF"
+                            isMetOfficeSource -> "Met Office DataHub"
+                            else -> "Open-Meteo Model"
+                        },
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            color = if (debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB) Color(0xFF2E7D32) else BentoHeroText,
+                            color = if (isMetOfficeSource) Color(0xFF2E7D32) else BentoHeroText,
                             fontSize = 10.sp
                         ),
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
@@ -423,9 +429,15 @@ private fun RawJsonViewerTab(
     onFilterChange: (String) -> Unit,
     onCopyJson: (String) -> Unit
 ) {
-    val isMetOffice = debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB
+    val isBpf = debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_BPF
+    val isMetOffice = debugInfo?.dataSource == WeatherDataSource.MET_OFFICE_DATAHUB || isBpf
 
     val rawJson = when {
+        isBpf -> when (selectedSubTab) {
+            0 -> debugInfo?.rawJsonHourly ?: "No BPF percentile data received"
+            1 -> debugInfo?.rawJsonThreeHourly ?: "No BPF probability data received"
+            else -> debugInfo?.rawJsonHourly ?: ""
+        }
         isMetOffice -> when (selectedSubTab) {
             0 -> debugInfo?.rawJsonHourly ?: "No Hourly Data Received"
             1 -> debugInfo?.rawJsonThreeHourly ?: "No 3-Hourly Data Received"
@@ -452,7 +464,12 @@ private fun RawJsonViewerTab(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                listOf("Hourly Point (48h)", "3-Hourly Point (7d)", "Daily Point (7d)").forEachIndexed { idx, title ->
+                val tabTitles = if (isBpf) {
+                    listOf("Percentiles (P50)", "Precipitation Chance")
+                } else {
+                    listOf("Hourly Point (48h)", "3-Hourly Point (7d)", "Daily Point (7d)")
+                }
+                tabTitles.forEachIndexed { idx, title ->
                     val isSelected = selectedSubTab == idx
                     Surface(
                         onClick = { onSelectSubTab(idx) },

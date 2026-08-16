@@ -16,6 +16,8 @@ object WidgetRefreshManager {
     private const val TAG = "WidgetRefreshManager"
     const val ACTION_AUTO_REFRESH = "com.example.widget.ACTION_AUTO_REFRESH"
     private const val REQUEST_CODE_AUTO_REFRESH = 4421
+    private const val HOUR_MILLIS = 60L * 60L * 1000L
+    private const val HOUR_BOUNDARY_WINDOW_MILLIS = 60L * 1000L
 
     fun scheduleAutoRefresh(
         context: Context,
@@ -36,15 +38,20 @@ object WidgetRefreshManager {
             alarmManager.cancel(pendingIntent)
             Log.d(TAG, "Widget auto-refresh cancelled (OFF)")
         } else {
-            val intervalMillis = interval.intervalMillis
-            val triggerAtMillis = System.currentTimeMillis() + intervalMillis
-            alarmManager.setInexactRepeating(
-                AlarmManager.RTC,
+            // Widget refreshes are deliberately fixed to hourly Spot data. Use a
+            // one-shot alarm aligned to the next clock-hour boundary; the receiver
+            // schedules the following hour after delivery. On modern Android a
+            // short window may be clamped to the platform minimum (currently ten
+            // minutes), but avoids the much wider window of an inexact repeater.
+            val now = System.currentTimeMillis()
+            val triggerAtMillis = ((now / HOUR_MILLIS) + 1L) * HOUR_MILLIS
+            alarmManager.setWindow(
+                AlarmManager.RTC_WAKEUP,
                 triggerAtMillis,
-                intervalMillis,
+                HOUR_BOUNDARY_WINDOW_MILLIS,
                 pendingIntent
             )
-            Log.d(TAG, "Widget auto-refresh scheduled every ${interval.label} (trigger at +${interval.hours}h)")
+            Log.d(TAG, "Widget Spot refresh scheduled hourly from the next clock-hour boundary")
         }
     }
 
@@ -54,9 +61,9 @@ object WidgetRefreshManager {
                 val prefs = PreferencesManager(context)
                 val location = WidgetLocationHelper.getWidgetLocation(context, prefs)
                 val repository = WeatherRepository(prefs)
-                val result = repository.getWeatherReport(location)
+                val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->
-                    prefs.setCachedWeatherReport(report)
+                    prefs.setCachedWidgetWeatherReport(report)
                     prefs.setWidgetPageOffset(0)
                     Log.d(TAG, "Widget background refresh succeeded for ${location.name}")
                 }.onFailure { error ->
@@ -66,6 +73,6 @@ object WidgetRefreshManager {
                 Log.e(TAG, "Error performing background widget refresh", e)
             }
         }
-        HourlyForecastWidget.updateAllWidgets(context)
+        HourlyForecastWidget.updateAllWidgets(context, resetPage = true)
     }
 }

@@ -3,6 +3,12 @@ package com.example
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.local.PreferencesManager
+import com.example.data.model.CurrentWeather
+import com.example.data.model.LocationItem
+import com.example.data.model.MetOfficeWeatherCode
+import com.example.data.model.WeatherDataSource
+import com.example.data.model.WeatherReport
 import com.example.ui.WeatherViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,20 +96,76 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `widget refresh interval defaults to hourly and can be updated`() {
+    fun `widget refresh is hourly unless explicitly disabled`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = WeatherViewModel(app)
 
         assertEquals(com.example.data.model.WidgetRefreshInterval.ONE_HOUR, viewModel.uiState.value.widgetRefreshInterval)
 
         viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.TWO_HOURS)
-        assertEquals(com.example.data.model.WidgetRefreshInterval.TWO_HOURS, viewModel.uiState.value.widgetRefreshInterval)
+        assertEquals(com.example.data.model.WidgetRefreshInterval.ONE_HOUR, viewModel.uiState.value.widgetRefreshInterval)
 
         viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.FOUR_HOURS)
-        assertEquals(com.example.data.model.WidgetRefreshInterval.FOUR_HOURS, viewModel.uiState.value.widgetRefreshInterval)
+        assertEquals(com.example.data.model.WidgetRefreshInterval.ONE_HOUR, viewModel.uiState.value.widgetRefreshInterval)
 
         viewModel.setWidgetRefreshInterval(com.example.data.model.WidgetRefreshInterval.OFF)
         assertEquals(com.example.data.model.WidgetRefreshInterval.OFF, viewModel.uiState.value.widgetRefreshInterval)
     }
-}
 
+    @Test
+    fun `BPF cache is per location and expires after two hours`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+        val location = LocationItem(
+            id = "cache_test_one",
+            name = "Cache Test One",
+            latitude = 52.1234,
+            longitude = 1.2345,
+            country = "United Kingdom"
+        )
+        val fetchedAt = 1_000_000L
+        val report = WeatherReport(
+            location = location,
+            current = CurrentWeather(
+                temperatureCelsius = 18.0,
+                feelsLikeCelsius = 17.0,
+                weatherCode = MetOfficeWeatherCode.CLOUDY,
+                maxTempCelsius = 20.0,
+                minTempCelsius = 12.0,
+                humidityPercent = 70,
+                windSpeedMph = 8.0,
+                windGustMph = 12.0,
+                windDirectionDegrees = 180,
+                precipitationChance = 30,
+                uvIndex = 2,
+                visibilityMeters = 20_000,
+                pressureHpa = 1012.0,
+                timestamp = "2026-08-16T12:00:00Z",
+                isNight = false
+            ),
+            hourly = emptyList(),
+            daily = emptyList(),
+            dataSource = WeatherDataSource.MET_OFFICE_BPF,
+            fetchedAtMillis = fetchedAt
+        )
+        val twoHours = 2L * 60L * 60L * 1000L
+
+        prefs.setCachedBpfWeatherReport(report)
+
+        assertNotNull(
+            prefs.getFreshCachedBpfWeatherReport(location, twoHours, fetchedAt + twoHours)
+        )
+        assertEquals(
+            null,
+            prefs.getFreshCachedBpfWeatherReport(location, twoHours, fetchedAt + twoHours + 1L)
+        )
+        assertEquals(
+            null,
+            prefs.getFreshCachedBpfWeatherReport(
+                location.copy(id = "cache_test_two", latitude = 53.1234),
+                twoHours,
+                fetchedAt + 1L
+            )
+        )
+    }
+}

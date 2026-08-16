@@ -56,6 +56,7 @@ import com.example.data.model.TemperatureUnit
 import com.example.data.model.WeatherIconType
 import com.example.data.model.WeatherReport
 import com.example.data.repository.WeatherRepository
+import com.example.data.util.TimezoneUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -74,9 +75,12 @@ class HourlyForecastWidget : GlanceAppWidget() {
             val pageOffset = glancePrefs[WidgetKeys.PAGE_OFFSET] ?: 0
 
             val appPrefs = PreferencesManager(context)
-            val cachedReport = appPrefs.getCachedWeatherReport()
             val tempUnit = appPrefs.getTemperatureUnit()
             val targetLocation = WidgetLocationHelper.getWidgetLocation(context, appPrefs)
+            val cachedReport = appPrefs.getCachedWidgetWeatherReport()?.takeIf { report ->
+                kotlin.math.abs(report.location.latitude - targetLocation.latitude) < 0.05 &&
+                    kotlin.math.abs(report.location.longitude - targetLocation.longitude) < 0.05
+            }
 
             GlanceTheme {
                 HourlyForecastWidgetContent(
@@ -90,7 +94,7 @@ class HourlyForecastWidget : GlanceAppWidget() {
         }
     }
     companion object {
-        suspend fun updateAllWidgets(context: Context) {
+        suspend fun updateAllWidgets(context: Context, resetPage: Boolean = false) {
             try {
                 val manager = GlanceAppWidgetManager(context)
                 val glanceIds = manager.getGlanceIds(HourlyForecastWidget::class.java)
@@ -98,6 +102,7 @@ class HourlyForecastWidget : GlanceAppWidget() {
                 for (glanceId in glanceIds) {
                     updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { glancePrefs ->
                         glancePrefs.toMutablePreferences().apply {
+                            if (resetPage) this[WidgetKeys.PAGE_OFFSET] = 0
                             this[WidgetKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
                         }
                     }
@@ -118,18 +123,30 @@ fun HourlyForecastWidgetContent(
     pageOffset: Int
 ) {
     val locationName = report?.location?.name ?: selectedLocation.name
-    val currentTemp = report?.current?.let { tempUnit.format(it.temperatureCelsius) } ?: "--°"
-    val conditionDesc = report?.current?.weatherCode?.description ?: "Weather Forecast"
     val allHourly = report?.hourly ?: emptyList()
 
-    // Find the 'Now' index or start from 0
-    val nowIndex = allHourly.indexOfFirst { it.isNow }.takeIf { it >= 0 } ?: 0
+    // Derive Now from the clock each time Glance renders. The cached isNow flag
+    // only describes the hour in which the forecast was downloaded.
+    val nowIndex = if (allHourly.isNotEmpty()) {
+        TimezoneUtils.findCurrentHourItemIndex(
+            fullTimes = allHourly.map { it.fullTime },
+            nowMillis = System.currentTimeMillis(),
+            location = report?.location ?: selectedLocation
+        ).coerceIn(0, allHourly.lastIndex)
+    } else {
+        0
+    }
+    val currentItem = allHourly.getOrNull(nowIndex)
+    val currentTemp = currentItem?.let { tempUnit.format(it.temperatureCelsius) } ?: "--°"
+    val conditionDesc = currentItem?.weatherCode?.description ?: "Weather Forecast"
     val maxOffset = (allHourly.size - nowIndex - 5).coerceAtLeast(0)
     val clampedOffset = pageOffset.coerceIn(0, maxOffset)
     val effectiveStartIndex = (nowIndex + clampedOffset).coerceIn(0, (allHourly.size - 1).coerceAtLeast(0))
 
     val visibleHourly = if (allHourly.isNotEmpty()) {
-        allHourly.drop(effectiveStartIndex).take(5)
+        allHourly.drop(effectiveStartIndex).take(5).mapIndexed { visibleIndex, item ->
+            item.copy(isNow = effectiveStartIndex + visibleIndex == nowIndex)
+        }
     } else {
         emptyList()
     }
@@ -429,9 +446,9 @@ class RefreshWeatherActionCallback : ActionCallback {
                 val prefs = PreferencesManager(context)
                 val location = WidgetLocationHelper.getWidgetLocation(context, prefs)
                 val repository = WeatherRepository(prefs)
-                val result = repository.getWeatherReport(location)
+                val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->
-                    prefs.setCachedWeatherReport(report)
+                    prefs.setCachedWidgetWeatherReport(report)
                     prefs.setWidgetPageOffset(0)
                 }
             } catch (_: Exception) {
@@ -477,9 +494,17 @@ class ShiftHoursActionCallback : ActionCallback {
     ) {
         val delta = parameters[OFFSET_DELTA_KEY] ?: 0
         val prefs = PreferencesManager(context)
-        val report = prefs.getCachedWeatherReport()
+        val report = prefs.getCachedWidgetWeatherReport()
         val allHourly = report?.hourly ?: emptyList()
-        val nowIndex = allHourly.indexOfFirst { it.isNow }.takeIf { it >= 0 } ?: 0
+        val nowIndex = if (allHourly.isNotEmpty()) {
+            TimezoneUtils.findCurrentHourItemIndex(
+                fullTimes = allHourly.map { it.fullTime },
+                nowMillis = System.currentTimeMillis(),
+                location = report?.location
+            ).coerceIn(0, allHourly.lastIndex)
+        } else {
+            0
+        }
         val maxOffset = (allHourly.size - nowIndex - 5).coerceAtLeast(0)
 
         updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { glancePrefs ->

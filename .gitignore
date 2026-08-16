@@ -19,3 +19,5 @@ debug.keystore
 .idea/
 *.jks
 *.keystore
+*.key
+/.api-fixtures/

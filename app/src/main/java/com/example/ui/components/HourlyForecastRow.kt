@@ -107,7 +107,24 @@ fun HourlyForecastRow(
                         extractHourFromTime(item.fullTime, location)
                     }
                     (0..23).map { h ->
-                        hourMap[h] ?: createSyntheticHourItem(dayItem, targetDate, h, location)
+                        hourMap[h] ?: run {
+                            val precedingThreeHourlySample = (1..2)
+                                .firstNotNullOfOrNull { offset -> hourMap[h - offset] }
+                            val synthetic = createSyntheticHourItem(dayItem, targetDate, h, location)
+                            precedingThreeHourlySample?.let { source ->
+                                synthetic.copy(
+                                    temperatureCelsius = source.temperatureCelsius,
+                                    feelsLikeCelsius = source.feelsLikeCelsius,
+                                    weatherCode = source.weatherCode,
+                                    precipitationChance = source.precipitationChance,
+                                    windSpeedMph = source.windSpeedMph,
+                                    windDirectionDegrees = source.windDirectionDegrees,
+                                    humidityPercent = source.humidityPercent,
+                                    uvIndex = source.uvIndex,
+                                    pressureHpa = source.pressureHpa
+                                )
+                            } ?: synthetic
+                        }
                     }
                 } else {
                     (0..23).map { h ->
@@ -196,7 +213,9 @@ fun HourlyForecastRow(
 
     // 2. When the user manually scrolls horizontally across the midnight boundary,
     // automatically detect the new day and update selectedDayIndex!
-    LaunchedEffect(timelineEntries, hourlyListState) {
+    // Include the selected index so this observer compares against the latest
+    // selection rather than the value captured when the row first appeared.
+    LaunchedEffect(timelineEntries, hourlyListState, selectedDayIndex) {
         snapshotFlow {
             val firstIndex = hourlyListState.firstVisibleItemIndex
             val entry = timelineEntries.getOrNull(firstIndex)
@@ -290,21 +309,36 @@ fun HourlyForecastRow(
                 }
             }
 
-            // Day Selector Pill Carousel
+            // Joined day forecast selector
             if (dailyList.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 LazyRow(
                     state = dayChipsListState,
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     items(dailyList.size) { index ->
                         val dayItem = dailyList[index]
                         val isSelected = index == currentDayIndex
+                        val segmentShape = when (index) {
+                            0 -> RoundedCornerShape(
+                                topStart = 12.dp,
+                                topEnd = 0.dp,
+                                bottomEnd = 0.dp,
+                                bottomStart = 12.dp
+                            )
+                            dailyList.lastIndex -> RoundedCornerShape(
+                                topStart = 0.dp,
+                                topEnd = 12.dp,
+                                bottomEnd = 12.dp,
+                                bottomStart = 0.dp
+                            )
+                            else -> RoundedCornerShape(0.dp)
+                        }
                         Surface(
                             onClick = { onSelectDay(index) },
-                            shape = RoundedCornerShape(14.dp),
+                            shape = segmentShape,
                             color = if (isSelected) BentoPurplePrimary else BentoCardWhite,
                             border = androidx.compose.foundation.BorderStroke(
                                 1.dp,
@@ -312,21 +346,50 @@ fun HourlyForecastRow(
                             ),
                             modifier = Modifier.testTag("hourly_day_chip_$index")
                         ) {
-                            val label = when (dayItem.dayOfWeek) {
-                                "Today" -> "Today"
-                                "Tomorrow" -> "Tomorrow"
-                                "Yesterday" -> "Yesterday"
-                                else -> dayItem.dayOfWeek.take(3)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier
+                                    .width(108.dp)
+                                    .height(68.dp)
+                                    .padding(horizontal = 7.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = dayItem.dayOfWeek,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = if (isSelected) Color.White else BentoTextPrimary,
+                                        fontSize = 11.5.sp
+                                    ),
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    WeatherIconView(
+                                        iconType = dayItem.dayWeatherCode.iconType,
+                                        size = 20.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = dayItem.dayWeatherCode.description,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (isSelected) {
+                                                Color.White.copy(alpha = 0.9f)
+                                            } else {
+                                                BentoTextSecondary
+                                            },
+                                            fontSize = 9.5.sp,
+                                            lineHeight = 10.5.sp
+                                        ),
+                                        maxLines = 2
+                                    )
+                                }
                             }
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) Color.White else BentoTextPrimary,
-                                    fontSize = 11.sp
-                                ),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
                         }
                     }
                 }
@@ -337,9 +400,17 @@ fun HourlyForecastRow(
             // Continuous Horizontal Timeline across days
             LazyRow(
                 state = hourlyListState,
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+                contentPadding = PaddingValues(0.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(
+                        1.dp,
+                        BentoBorder.copy(alpha = 0.6f),
+                        RoundedCornerShape(14.dp)
+                    )
             ) {
                 items(
                     items = timelineEntries,
@@ -348,7 +419,8 @@ fun HourlyForecastRow(
                     HourlyItemCard(
                         entry = entry,
                         tempUnit = tempUnit,
-                        windUnit = windUnit
+                        windUnit = windUnit,
+                        connected = true
                     )
                 }
             }
@@ -385,6 +457,7 @@ fun HourlyItemCard(
     entry: HourlyTimelineEntry,
     tempUnit: TemperatureUnit,
     windUnit: WindSpeedUnit,
+    connected: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val item = entry.item
@@ -393,17 +466,21 @@ fun HourlyItemCard(
 
     Box(
         modifier = modifier
-            .width(72.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .width(if (connected) 64.dp else 72.dp)
+            .then(if (connected) Modifier.height(176.dp) else Modifier)
+            .clip(if (connected) RoundedCornerShape(0.dp) else RoundedCornerShape(18.dp))
             .background(if (isNow) BentoHero else BentoCardWhite)
             .border(
-                1.dp,
+                if (connected && !isNow) 0.5.dp else 1.dp,
                 if (isNow) BentoPurplePrimary.copy(alpha = 0.7f)
                 else if (isMidnight) BentoPurplePrimary.copy(alpha = 0.4f)
                 else BentoBorder.copy(alpha = 0.55f),
-                RoundedCornerShape(18.dp)
+                if (connected) RoundedCornerShape(0.dp) else RoundedCornerShape(18.dp)
             )
-            .padding(vertical = 10.dp, horizontal = 5.dp)
+            .padding(
+                vertical = if (connected) 8.dp else 10.dp,
+                horizontal = if (connected) 3.dp else 5.dp
+            )
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,

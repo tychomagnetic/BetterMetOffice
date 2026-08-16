@@ -19,6 +19,9 @@ class WidgetAutoRefreshReceiver : BroadcastReceiver() {
 
         when (action) {
             WidgetRefreshManager.ACTION_AUTO_REFRESH -> {
+                // The refresh alarm is one-shot so each run can be realigned to
+                // the following top-of-hour boundary.
+                WidgetRefreshManager.scheduleAutoRefresh(context.applicationContext)
                 val pendingResult = goAsync()
                 receiverScope.launch {
                     try {

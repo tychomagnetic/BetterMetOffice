@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Info
@@ -48,12 +49,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.LocationItem
+import com.example.data.model.ForecastSource
 import com.example.data.model.WeatherDataSource
 import com.example.ui.theme.BentoBorder
 import com.example.ui.theme.BentoHero
@@ -66,14 +69,15 @@ import com.example.ui.theme.BentoTile
 fun WeatherTopBar(
     location: LocationItem,
     dataSource: WeatherDataSource?,
-    useMetOfficeSource: Boolean,
+    forecastSource: ForecastSource,
     hasApiKey: Boolean,
+    hasBpfApiKey: Boolean,
     isRefreshing: Boolean,
     onLocationClick: () -> Unit,
     onFavoriteToggle: () -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    onDataSourceToggle: (Boolean) -> Unit,
+    onDataSourceSelect: (ForecastSource) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     isFavorite: Boolean = location.isFavorite
@@ -273,7 +277,7 @@ fun WeatherTopBar(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Data Source Toggle Segment: Met Office DataHub vs Open Data
+        // Data Source Toggle Segment
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -284,85 +288,41 @@ fun WeatherTopBar(
                 .testTag("data_source_toggle_container"),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Met Office Button
-            val isMetOfficeSelected = useMetOfficeSource
-            Surface(
-                onClick = {
-                    if (!isMetOfficeSelected) {
-                        onDataSourceToggle(true)
-                    }
-                },
-                shape = RoundedCornerShape(13.dp),
-                color = if (isMetOfficeSelected) BentoPurplePrimary else Color.Transparent,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("toggle_met_office_button")
-            ) {
-                Row(
-                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Cloud,
-                        contentDescription = null,
-                        tint = if (isMetOfficeSelected) Color.White else BentoTextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Met Office DataHub",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = if (isMetOfficeSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isMetOfficeSelected) Color.White else BentoTextPrimary,
-                            fontSize = 12.sp
-                        ),
-                        maxLines = 1
-                    )
-                }
-            }
-
-            // Open Data Button
-            val isOpenDataSelected = !useMetOfficeSource
-            Surface(
-                onClick = {
-                    if (!isOpenDataSelected) {
-                        onDataSourceToggle(false)
-                    }
-                },
-                shape = RoundedCornerShape(13.dp),
-                color = if (isOpenDataSelected) Color(0xFF0284C7) else Color.Transparent,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("toggle_open_data_button")
-            ) {
-                Row(
-                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Public,
-                        contentDescription = null,
-                        tint = if (isOpenDataSelected) Color.White else BentoTextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Open Data",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = if (isOpenDataSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isOpenDataSelected) Color.White else BentoTextPrimary,
-                            fontSize = 12.sp
-                        ),
-                        maxLines = 1
-                    )
-                }
-            }
+            SourceToggleButton(
+                label = "Spot",
+                icon = Icons.Default.Cloud,
+                selected = forecastSource == ForecastSource.MET_OFFICE_SPOT,
+                selectedColor = BentoPurplePrimary,
+                testTag = "toggle_met_office_button",
+                onClick = { onDataSourceSelect(ForecastSource.MET_OFFICE_SPOT) },
+                modifier = Modifier.weight(1f)
+            )
+            SourceToggleButton(
+                label = "BPF",
+                icon = Icons.Default.DataObject,
+                selected = forecastSource == ForecastSource.MET_OFFICE_BPF,
+                selectedColor = Color(0xFF2E7D32),
+                testTag = "toggle_bpf_button",
+                onClick = { onDataSourceSelect(ForecastSource.MET_OFFICE_BPF) },
+                modifier = Modifier.weight(1f)
+            )
+            SourceToggleButton(
+                label = "Open",
+                icon = Icons.Default.Public,
+                selected = forecastSource == ForecastSource.OPEN_METEO,
+                selectedColor = Color(0xFF0284C7),
+                testTag = "toggle_open_data_button",
+                onClick = { onDataSourceSelect(ForecastSource.OPEN_METEO) },
+                modifier = Modifier.weight(1f)
+            )
         }
 
-        // Helpful alert if Met Office is selected but API key is missing
-        if (useMetOfficeSource && !hasApiKey) {
+        val activeKeyMissing = when (forecastSource) {
+            ForecastSource.MET_OFFICE_SPOT -> !hasApiKey
+            ForecastSource.MET_OFFICE_BPF -> !hasBpfApiKey
+            ForecastSource.OPEN_METEO -> false
+        }
+        if (activeKeyMissing) {
             Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier
@@ -387,7 +347,11 @@ fun WeatherTopBar(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Met Office API key needed for UK official model",
+                        text = if (forecastSource == ForecastSource.MET_OFFICE_BPF) {
+                            "BPF API key needed for advanced model"
+                        } else {
+                            "Met Office API key needed for UK official model"
+                        },
                         style = MaterialTheme.typography.bodySmall.copy(
                             color = Color(0xFFE65100),
                             fontSize = 11.sp,
@@ -406,6 +370,47 @@ fun WeatherTopBar(
                     )
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SourceToggleButton(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    selectedColor: Color,
+    testTag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(13.dp),
+        color = if (selected) selectedColor else Color.Transparent,
+        modifier = modifier.testTag(testTag)
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) Color.White else BentoTextSecondary,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) Color.White else BentoTextPrimary,
+                    fontSize = 11.sp
+                ),
+                maxLines = 1
+            )
         }
     }
 }

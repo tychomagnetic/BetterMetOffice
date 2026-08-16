@@ -97,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.PressureUnit
+import com.example.data.model.ForecastSource
 import com.example.data.model.TemperatureUnit
 import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
@@ -124,8 +125,10 @@ fun SettingsScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     var apiKeyInput by remember(uiState.apiKey) { mutableStateOf(uiState.apiKey) }
+    var bpfApiKeyInput by remember(uiState.bpfApiKey) { mutableStateOf(uiState.bpfApiKey) }
     var clientSecretInput by remember(uiState.clientSecret) { mutableStateOf(uiState.clientSecret) }
     var isApiKeyVisible by remember { mutableStateOf(false) }
+    var isBpfApiKeyVisible by remember { mutableStateOf(false) }
     var isSecretVisible by remember { mutableStateOf(false) }
     var isHelpExpanded by remember { mutableStateOf(false) }
 
@@ -181,19 +184,20 @@ fun SettingsScreen(
             SettingsCard(
                 title = "Data Source Selection",
                 icon = Icons.Default.Public,
-                subtitle = "Toggle between official UK Met Office data and open meteorological data"
+                subtitle = "Choose the forecast model used by the app"
             ) {
                 // Met Office DataHub Option
                 val hasApiKey = uiState.apiKey.isNotBlank()
+                val hasBpfApiKey = uiState.bpfApiKey.isNotBlank()
                 Surface(
                     onClick = {
-                        viewModel.toggleDataSource(useMetOffice = true)
+                        viewModel.selectForecastSource(ForecastSource.MET_OFFICE_SPOT)
                     },
                     shape = RoundedCornerShape(16.dp),
-                    color = if (uiState.useMetOfficeSource) Color(0xFFEDE7F6) else Color.Transparent,
+                    color = if (uiState.forecastSource == ForecastSource.MET_OFFICE_SPOT) Color(0xFFEDE7F6) else Color.Transparent,
                     border = androidx.compose.foundation.BorderStroke(
                         1.5.dp,
-                        if (uiState.useMetOfficeSource) BentoPurplePrimary else BentoBorder.copy(alpha = 0.6f)
+                        if (uiState.forecastSource == ForecastSource.MET_OFFICE_SPOT) BentoPurplePrimary else BentoBorder.copy(alpha = 0.6f)
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("source_met_office_option")
                 ) {
@@ -205,13 +209,13 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(CircleShape)
-                                .background(if (uiState.useMetOfficeSource) BentoPurplePrimary else Color(0xFFE2E8F0)),
+                                .background(if (uiState.forecastSource == ForecastSource.MET_OFFICE_SPOT) BentoPurplePrimary else Color(0xFFE2E8F0)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Cloud,
                                 contentDescription = null,
-                                tint = if (uiState.useMetOfficeSource) Color.White else BentoTextSecondary,
+                                tint = if (uiState.forecastSource == ForecastSource.MET_OFFICE_SPOT) Color.White else BentoTextSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -271,16 +275,71 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                Surface(
+                    onClick = { viewModel.selectForecastSource(ForecastSource.MET_OFFICE_BPF) },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (uiState.forecastSource == ForecastSource.MET_OFFICE_BPF) Color(0xFFE8F5E9) else Color.Transparent,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.5.dp,
+                        if (uiState.forecastSource == ForecastSource.MET_OFFICE_BPF) Color(0xFF2E7D32) else BentoBorder.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier.fillMaxWidth().testTag("source_met_office_bpf_option")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (uiState.forecastSource == ForecastSource.MET_OFFICE_BPF) Color(0xFF2E7D32) else Color(0xFFE2E8F0)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DataObject,
+                                contentDescription = null,
+                                tint = if (uiState.forecastSource == ForecastSource.MET_OFFICE_BPF) Color.White else BentoTextSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Met Office BPF Advanced Model",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = BentoTextPrimary)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (hasBpfApiKey) "Key Set" else "Key Needed",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (hasBpfApiKey) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 9.5.sp
+                                    )
+                                )
+                            }
+                            Text(
+                                text = "Higher-resolution probabilistic forecast. Fresh results are cached per location for two hours; Refresh always forces a new pull. The widget remains on Spot.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 12.sp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 // Open Data Option
                 Surface(
                     onClick = {
-                        viewModel.toggleDataSource(useMetOffice = false)
+                        viewModel.selectForecastSource(ForecastSource.OPEN_METEO)
                     },
                     shape = RoundedCornerShape(16.dp),
-                    color = if (!uiState.useMetOfficeSource) Color(0xFFE0F2FE) else Color.Transparent,
+                    color = if (uiState.forecastSource == ForecastSource.OPEN_METEO) Color(0xFFE0F2FE) else Color.Transparent,
                     border = androidx.compose.foundation.BorderStroke(
                         1.5.dp,
-                        if (!uiState.useMetOfficeSource) Color(0xFF0284C7) else BentoBorder.copy(alpha = 0.6f)
+                        if (uiState.forecastSource == ForecastSource.OPEN_METEO) Color(0xFF0284C7) else BentoBorder.copy(alpha = 0.6f)
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("source_open_data_option")
                 ) {
@@ -292,13 +351,13 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(CircleShape)
-                                .background(if (!uiState.useMetOfficeSource) Color(0xFF0284C7) else Color(0xFFE2E8F0)),
+                                .background(if (uiState.forecastSource == ForecastSource.OPEN_METEO) Color(0xFF0284C7) else Color(0xFFE2E8F0)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Public,
                                 contentDescription = null,
-                                tint = if (!uiState.useMetOfficeSource) Color.White else BentoTextSecondary,
+                                tint = if (uiState.forecastSource == ForecastSource.OPEN_METEO) Color.White else BentoTextSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -653,7 +712,136 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 3: Units of Measurement
+            // Section 3: BPF API Key Configuration
+            SettingsCard(
+                title = "BPF Advanced Model Key",
+                icon = Icons.Default.DataObject,
+                subtitle = "A separate subscription key. BPF uses two calls when a location has no forecast newer than two hours."
+            ) {
+                val bpfConfigured = uiState.bpfApiKey.isNotBlank()
+                Text(
+                    text = if (bpfConfigured) "BPF key configured" else "No BPF key saved",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = if (bpfConfigured) Color(0xFF2E7D32) else Color(0xFFE65100),
+                        fontWeight = FontWeight.Medium
+                    )
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = bpfApiKeyInput,
+                    onValueChange = { bpfApiKeyInput = it },
+                    label = { Text("BPF API Key") },
+                    placeholder = { Text("Paste the key from your BPF subscription") },
+                    singleLine = true,
+                    visualTransformation = if (isBpfApiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (bpfApiKeyInput.isNotBlank()) {
+                                IconButton(onClick = { bpfApiKeyInput = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear BPF key", tint = BentoTextSecondary)
+                                }
+                            }
+                            IconButton(onClick = { isBpfApiKeyVisible = !isBpfApiKeyVisible }) {
+                                Icon(
+                                    imageVector = if (isBpfApiKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (isBpfApiKeyVisible) "Hide BPF key" else "Show BPF key",
+                                    tint = BentoTextSecondary
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF2E7D32),
+                        unfocusedBorderColor = BentoBorder,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = BentoHero
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                    }),
+                    modifier = Modifier.fillMaxWidth().testTag("bpf_api_key_text_field")
+                )
+
+                if (uiState.bpfApiKeyTestStatus != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    val status = uiState.bpfApiKeyTestStatus
+                    val isSuccess = status is ApiKeyTestResult.Success
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = when (status) {
+                                is ApiKeyTestResult.Success -> status.message
+                                is ApiKeyTestResult.Error -> status.message
+                                null -> ""
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = if (isSuccess) Color(0xFF1B5E20) else Color(0xFFB71C1C),
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
+                            viewModel.testBpfApiKey(bpfApiKeyInput)
+                        },
+                        enabled = bpfApiKeyInput.isNotBlank() && !uiState.isTestingBpfApiKey,
+                        modifier = Modifier.weight(1f).testTag("test_bpf_api_key_button")
+                    ) {
+                        if (uiState.isTestingBpfApiKey) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Testing...")
+                        } else Text("Test")
+                    }
+                    Button(
+                        onClick = {
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
+                            viewModel.saveBpfApiKey(bpfApiKeyInput)
+                            Toast.makeText(context, "BPF API key saved", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        modifier = Modifier.weight(1.3f).testTag("save_bpf_api_key_button")
+                    ) { Text("Save & Apply") }
+                    if (bpfConfigured || bpfApiKeyInput.isNotBlank()) {
+                        IconButton(
+                            onClick = {
+                                bpfApiKeyInput = ""
+                                viewModel.clearBpfApiKey()
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFFFEBEE))
+                                .testTag("clear_bpf_api_key_button")
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear BPF key", tint = Color(0xFFC62828))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Testing spends one request. Widget and background widget refreshes never call BPF; the widget always uses its separate Spot-data cache.",
+                    style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 11.sp)
+                )
+            }
+
+            // Section 4: Units of Measurement
             SettingsCard(
                 title = "Units of Measurement",
                 icon = Icons.Default.Tune,
@@ -998,7 +1186,7 @@ fun SettingsScreen(
                     )
                 )
                 Text(
-                    text = "Automatically fetches the latest forecast in the background so your home screen widget stays current.",
+                    text = "Uses Met Office Spot data independently of the source selected in the app. Refreshes are aligned to the top of each hour.",
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = BentoTextSecondary,
                         fontSize = 11.5.sp
@@ -1007,7 +1195,7 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Auto-refresh interval choice buttons: Off, 1 Hour (Default), 2 Hours, 4 Hours
+                // Widget refresh is deliberately fixed to hourly Spot data.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1028,25 +1216,7 @@ fun SettingsScreen(
                             viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.ONE_HOUR)
                             Toast.makeText(context, "Widget auto-refresh set to 1 hour (Default)", Toast.LENGTH_SHORT).show()
                         },
-                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_1h")
-                    )
-                    UnitOptionButton(
-                        label = "2 Hours",
-                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.TWO_HOURS,
-                        onClick = {
-                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.TWO_HOURS)
-                            Toast.makeText(context, "Widget auto-refresh set to 2 hours", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_2h")
-                    )
-                    UnitOptionButton(
-                        label = "4 Hours",
-                        selected = uiState.widgetRefreshInterval == WidgetRefreshInterval.FOUR_HOURS,
-                        onClick = {
-                            viewModel.setWidgetRefreshInterval(WidgetRefreshInterval.FOUR_HOURS)
-                            Toast.makeText(context, "Widget auto-refresh set to 4 hours", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.weight(1.1f).testTag("widget_refresh_4h")
+                        modifier = Modifier.weight(1f).testTag("widget_refresh_1h")
                     )
                 }
 
@@ -1074,11 +1244,10 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = when (uiState.widgetRefreshInterval) {
-                                WidgetRefreshInterval.OFF -> "Auto-refresh is off. Widget will only update on manual refresh or app launch."
-                                WidgetRefreshInterval.ONE_HOUR -> "Auto-refreshing hourly (Default). Keeps the 48-hour forecast updated."
-                                WidgetRefreshInterval.TWO_HOURS -> "Auto-refreshing every 2 hours in the background."
-                                WidgetRefreshInterval.FOUR_HOURS -> "Auto-refreshing every 4 hours in the background."
+                            text = if (uiState.widgetRefreshInterval == WidgetRefreshInterval.OFF) {
+                                "Auto-refresh is off. The widget will fetch Spot data only when manually refreshed."
+                            } else {
+                                "Auto-refreshing Spot data hourly. The Now slot advances from the current clock time."
                             },
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = if (uiState.widgetRefreshInterval != WidgetRefreshInterval.OFF) BentoPurplePrimary else BentoTextSecondary,
@@ -1092,7 +1261,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "The Glance widget displays 5 hourly periods with instantaneous Now, < and > navigation and direct app launching.",
+                    text = "The widget displays 5 hourly periods with a clock-derived Now slot, < and > navigation and direct app launching.",
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = BentoTextSecondary,
                         fontSize = 12.sp

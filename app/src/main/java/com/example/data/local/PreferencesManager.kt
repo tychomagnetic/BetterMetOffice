@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import com.example.data.model.LocationItem
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
+import com.example.data.model.ForecastSource
+import com.example.data.model.WeatherDataSource
 import com.example.data.model.WeatherReport
 import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
@@ -14,6 +16,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.Locale
 
 class PreferencesManager(context: Context) {
 
@@ -50,6 +53,12 @@ class PreferencesManager(context: Context) {
     private val _useMetOfficeSourceFlow = MutableStateFlow(isMetOfficePreferred())
     val useMetOfficeSourceFlow: StateFlow<Boolean> = _useMetOfficeSourceFlow.asStateFlow()
 
+    private val _forecastSourceFlow = MutableStateFlow(getForecastSource())
+    val forecastSourceFlow: StateFlow<ForecastSource> = _forecastSourceFlow.asStateFlow()
+
+    private val _bpfApiKeyFlow = MutableStateFlow(getBpfApiKey())
+    val bpfApiKeyFlow: StateFlow<String> = _bpfApiKeyFlow.asStateFlow()
+
     private val _widgetRefreshIntervalFlow = MutableStateFlow(getWidgetRefreshInterval())
     val widgetRefreshIntervalFlow: StateFlow<WidgetRefreshInterval> = _widgetRefreshIntervalFlow.asStateFlow()
 
@@ -66,6 +75,29 @@ class PreferencesManager(context: Context) {
     fun setMetOfficePreferred(useMetOffice: Boolean) {
         prefs.edit().putBoolean(KEY_USE_MET_OFFICE, useMetOffice).apply()
         _useMetOfficeSourceFlow.value = useMetOffice
+        setForecastSource(if (useMetOffice) ForecastSource.MET_OFFICE_SPOT else ForecastSource.OPEN_METEO)
+    }
+
+    fun getForecastSource(): ForecastSource {
+        val saved = prefs.getString(KEY_FORECAST_SOURCE, null)
+        if (saved != null) {
+            return try {
+                ForecastSource.valueOf(saved)
+            } catch (_: Exception) {
+                ForecastSource.MET_OFFICE_SPOT
+            }
+        }
+        // Migration for existing installs using the previous two-source switch.
+        return if (prefs.getBoolean(KEY_USE_MET_OFFICE, true)) ForecastSource.MET_OFFICE_SPOT else ForecastSource.OPEN_METEO
+    }
+
+    fun setForecastSource(source: ForecastSource) {
+        prefs.edit()
+            .putString(KEY_FORECAST_SOURCE, source.name)
+            .putBoolean(KEY_USE_MET_OFFICE, source != ForecastSource.OPEN_METEO)
+            .apply()
+        _forecastSourceFlow.value = source
+        _useMetOfficeSourceFlow.value = source != ForecastSource.OPEN_METEO
     }
 
     fun getApiKey(): String {
@@ -84,6 +116,13 @@ class PreferencesManager(context: Context) {
     fun setClientSecret(secret: String) {
         prefs.edit().putString(KEY_MET_OFFICE_SECRET, secret.trim()).apply()
         _clientSecretFlow.value = secret.trim()
+    }
+
+    fun getBpfApiKey(): String = prefs.getString(KEY_MET_OFFICE_BPF_API_KEY, "") ?: ""
+
+    fun setBpfApiKey(key: String) {
+        prefs.edit().putString(KEY_MET_OFFICE_BPF_API_KEY, key.trim()).apply()
+        _bpfApiKeyFlow.value = key.trim()
     }
 
     fun getSelectedLocation(): LocationItem {
@@ -194,6 +233,69 @@ class PreferencesManager(context: Context) {
         }
     }
 
+    fun getFreshCachedBpfWeatherReport(
+        location: LocationItem,
+        maxAgeMillis: Long,
+        nowMillis: Long = System.currentTimeMillis()
+    ): WeatherReport? {
+        val locationCacheKey = bpfCacheKey(location)
+        val locationJson = prefs.getString(locationCacheKey, null)
+        // Adopt the pre-existing single app cache after upgrading, provided it
+        // belongs to this location and is still within the freshness window.
+        val json = locationJson ?: prefs.getString(KEY_CACHED_WEATHER_REPORT, null) ?: return null
+        val report = try {
+            weatherReportAdapter.fromJson(json)
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val ageMillis = nowMillis - report.fetchedAtMillis
+        val sameLocation = kotlin.math.abs(report.location.latitude - location.latitude) < 0.0001 &&
+            kotlin.math.abs(report.location.longitude - location.longitude) < 0.0001
+        val freshReport = report.takeIf {
+            it.dataSource == WeatherDataSource.MET_OFFICE_BPF &&
+                sameLocation &&
+                ageMillis in 0..maxAgeMillis
+        } ?: return null
+
+        if (locationJson == null) setCachedBpfWeatherReport(freshReport)
+        return freshReport
+    }
+
+    fun setCachedBpfWeatherReport(report: WeatherReport) {
+        if (report.dataSource != WeatherDataSource.MET_OFFICE_BPF) return
+        try {
+            val json = weatherReportAdapter.toJson(report)
+            prefs.edit().putString(bpfCacheKey(report.location), json).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun bpfCacheKey(location: LocationItem): String =
+        KEY_CACHED_BPF_LOCATION_PREFIX + String.format(
+            Locale.US,
+            "%.4f_%.4f",
+            location.latitude,
+            location.longitude
+        )
+
+    fun getCachedWidgetWeatherReport(): WeatherReport? {
+        val json = prefs.getString(KEY_CACHED_WIDGET_WEATHER_REPORT, null) ?: return null
+        return try {
+            weatherReportAdapter.fromJson(json)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun setCachedWidgetWeatherReport(report: WeatherReport) {
+        try {
+            val json = weatherReportAdapter.toJson(report)
+            prefs.edit().putString(KEY_CACHED_WIDGET_WEATHER_REPORT, json).apply()
+        } catch (_: Exception) {
+        }
+    }
+
     fun getWidgetPageOffset(): Int {
         return prefs.getInt(KEY_WIDGET_PAGE_OFFSET, 0)
     }
@@ -248,13 +350,17 @@ class PreferencesManager(context: Context) {
         private const val PREFS_NAME = "met_office_weather_prefs"
         private const val KEY_MET_OFFICE_API_KEY = "met_office_api_key"
         private const val KEY_MET_OFFICE_SECRET = "met_office_secret"
+        private const val KEY_MET_OFFICE_BPF_API_KEY = "met_office_bpf_api_key"
         private const val KEY_SELECTED_LOCATION = "selected_location"
         private const val KEY_FAVORITE_LOCATIONS = "favorite_locations"
         private const val KEY_TEMP_UNIT = "temp_unit"
         private const val KEY_WIND_UNIT = "wind_unit"
         private const val KEY_PRESSURE_UNIT = "pressure_unit"
         private const val KEY_USE_MET_OFFICE = "use_met_office_source"
+        private const val KEY_FORECAST_SOURCE = "forecast_source"
         private const val KEY_CACHED_WEATHER_REPORT = "cached_weather_report"
+        private const val KEY_CACHED_WIDGET_WEATHER_REPORT = "cached_widget_weather_report"
+        private const val KEY_CACHED_BPF_LOCATION_PREFIX = "cached_bpf_location_"
         private const val KEY_WIDGET_PAGE_OFFSET = "widget_page_offset"
         private const val KEY_WIDGET_REFRESH_INTERVAL = "widget_refresh_interval"
         private const val KEY_WIDGET_USE_GPS = "widget_use_gps"
