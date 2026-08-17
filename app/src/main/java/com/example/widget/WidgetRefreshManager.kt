@@ -60,6 +60,10 @@ object WidgetRefreshManager {
             try {
                 val prefs = PreferencesManager(context)
                 val location = WidgetLocationHelper.getWidgetLocation(context, prefs)
+                if (location == null) {
+                    Log.w(TAG, "Widget GPS refresh skipped: permission or current location unavailable")
+                    return@withContext
+                }
                 val repository = WeatherRepository(prefs)
                 val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->

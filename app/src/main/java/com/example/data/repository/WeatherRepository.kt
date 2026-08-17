@@ -45,7 +45,11 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 sealed class ApiKeyTestResult {
     data class Success(val message: String = "Success! Met Office API verified.") : ApiKeyTestResult()
@@ -149,7 +153,10 @@ class WeatherRepository(
             }
         }
 
-        if (selectedSource == ForecastSource.MET_OFFICE_SPOT && apiKey.isNotBlank()) {
+        // Spot is also the first fallback for BPF. This matters for locations
+        // outside BPF coverage and when the probabilistic service is unavailable.
+        // Open-Meteo remains the final fallback if Spot is unavailable too.
+        if (selectedSource != ForecastSource.OPEN_METEO && apiKey.isNotBlank()) {
             try {
                 // Fetch hourly, three-hourly, and daily concurrently from Met Office DataHub
                 val hourlyDeferred = async {
@@ -209,6 +216,14 @@ class WeatherRepository(
                     val resolvedLon = coords?.getOrNull(0)
                     val resolvedLat = coords?.getOrNull(1)
                     val resolvedName = feature?.properties?.location?.name
+
+                    requireResolvedLocationMatchesRequest(
+                        requested = location,
+                        resolvedLatitude = resolvedLat,
+                        resolvedLongitude = resolvedLon,
+                        sourceName = "Met Office Spot",
+                        maximumDistanceKm = MAX_SPOT_RESOLVED_LOCATION_DISTANCE_KM
+                    )
 
                     val hourlyJson = toPrettyJson(MetOfficeHourlyResponse::class.java, hourlyBody)
                     val threeHourlyJson = if (threeHourlyBody != null) toPrettyJson(MetOfficeHourlyResponse::class.java, threeHourlyBody) else null
@@ -573,6 +588,19 @@ class WeatherRepository(
         val percentileCollection = coverageAdapter.fromJson(percentileJson)
             ?: throw IllegalStateException("BPF returned an unreadable percentile payload")
         val probabilityCollection = probabilityJson?.let { coverageAdapter.fromJson(it) }
+        val firstCoverage = percentileCollection.coverages.firstOrNull()
+        val axes = firstCoverage?.domain?.axes.orEmpty()
+        val resolvedLon = (axes["x"]?.values?.firstOrNull() as? Number)?.toDouble()
+        val resolvedLat = (axes["y"]?.values?.firstOrNull() as? Number)?.toDouble()
+        val locationId = axes["locationId"]?.values?.firstOrNull()?.toString()
+
+        requireResolvedLocationMatchesRequest(
+            requested = location,
+            resolvedLatitude = resolvedLat,
+            resolvedLongitude = resolvedLon,
+            sourceName = "Met Office BPF",
+            maximumDistanceKm = MAX_BPF_RESOLVED_LOCATION_DISTANCE_KM
+        )
 
         val temperatures = bpfSeries(percentileCollection, "airTemperature1p5m")
         val sourceTimes = temperatures.keys.toList()
@@ -615,19 +643,23 @@ class WeatherRepository(
             expandAcrossInterval = true
         )
         val ultravioletIndex = bpfSeries(percentileCollection, "ultravioletIndex")
+        // Probability values use the CoverageJSON validity time (`t`). A PT01H
+        // value with bounds 15:00-16:00 is therefore displayed at 16:00, not
+        // moved back to 15:00. This also makes its label comparable with Spot,
+        // whose PoP is centred on its validity time.
         val hourlyPrecipitationProbability = probabilityCollection?.let {
-            bpfIntervalSeries(
+            bpfSeries(
                 it,
-                parameter = "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h",
-                intervalHours = 1
+                "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h"
             )
         }.orEmpty()
         val threeHourlyPrecipitationProbability = probabilityCollection?.let {
-            bpfIntervalSeries(
-                it,
-                parameter = "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h",
-                intervalHours = 3,
-                expandAcrossInterval = true
+            BpfIntervalUtils.expandFromValidityTime(
+                series = bpfSeries(
+                    it,
+                    "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h"
+                ),
+                intervalHours = 3
             )
         }.orEmpty()
 
@@ -748,12 +780,6 @@ class WeatherRepository(
         val currentTime = times[currentIndex]
         val currentDay = daily.firstOrNull { it.date == TimezoneUtils.getForecastLocalDate(currentTime, location) } ?: daily.first()
         val currentIsNight = TimezoneUtils.isNightTime(currentTime, location)
-        val firstCoverage = percentileCollection.coverages.firstOrNull()
-        val axes = firstCoverage?.domain?.axes.orEmpty()
-        val resolvedLon = axes["x"]?.values?.firstOrNull() as? Number
-        val resolvedLat = axes["y"]?.values?.firstOrNull() as? Number
-        val locationId = axes["locationId"]?.values?.firstOrNull()?.toString()
-
         _debugInfo.update { old ->
             ApiDebugInfo(
                 location = location,
@@ -766,8 +792,8 @@ class WeatherRepository(
                 rawJsonThreeHourly = "CoverageJSON BPF precipitation probability payload: ${probabilityCollection?.coverages?.size ?: 0} coverage(s); >0.0 one- and three-hour precipitation-amount thresholds selected.",
                 lastGeocodingQuery = old?.lastGeocodingQuery,
                 rawJsonGeocoding = old?.rawJsonGeocoding,
-                serverResolvedLat = resolvedLat?.toDouble(),
-                serverResolvedLon = resolvedLon?.toDouble(),
+                serverResolvedLat = resolvedLat,
+                serverResolvedLon = resolvedLon,
                 serverResolvedName = locationId?.let { "BPF grid point $it" },
                 timestamp = timestamp
             )
@@ -813,6 +839,50 @@ class WeatherRepository(
         }
         val end = (start.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 7) }
         return "${formatter.format(start.time)}/${formatter.format(end.time)}"
+    }
+
+    /**
+     * Site-specific endpoints may snap an out-of-domain coordinate to a distant
+     * forecast grid point while still returning HTTP 200. Never relabel or cache
+     * that payload as the requested location; throwing here advances the normal
+     * BPF -> Spot -> Open-Meteo fallback chain.
+     */
+    private fun requireResolvedLocationMatchesRequest(
+        requested: LocationItem,
+        resolvedLatitude: Double?,
+        resolvedLongitude: Double?,
+        sourceName: String,
+        maximumDistanceKm: Double
+    ) {
+        if (resolvedLatitude == null || resolvedLongitude == null) {
+            throw IllegalStateException("$sourceName did not identify its resolved forecast location")
+        }
+        val distanceKm = distanceKm(
+            requested.latitude,
+            requested.longitude,
+            resolvedLatitude,
+            resolvedLongitude
+        )
+        if (distanceKm > maximumDistanceKm) {
+            throw IllegalStateException(
+                "$sourceName resolved ${distanceKm.roundToInt()} km from ${requested.name}"
+            )
+        }
+    }
+
+    private fun distanceKm(
+        latitude1: Double,
+        longitude1: Double,
+        latitude2: Double,
+        longitude2: Double
+    ): Double {
+        val lat1 = Math.toRadians(latitude1)
+        val lat2 = Math.toRadians(latitude2)
+        val deltaLat = Math.toRadians(latitude2 - latitude1)
+        val deltaLon = Math.toRadians(longitude2 - longitude1)
+        val a = sin(deltaLat / 2) * sin(deltaLat / 2) +
+            cos(lat1) * cos(lat2) * sin(deltaLon / 2) * sin(deltaLon / 2)
+        return 2 * EARTH_RADIUS_KM * atan2(sqrt(a), sqrt(1 - a))
     }
 
     private fun bpfSeries(collection: BpfCoverageCollection, parameter: String): Map<String, Double> {
@@ -1679,6 +1749,13 @@ class WeatherRepository(
     }
 
     companion object {
+        private const val EARTH_RADIUS_KM = 6371.0
+        // BPF's UK collection is comparatively dense. Global Spot, however,
+        // resolves to one of a much sparser worldwide set of named sites; its
+        // legitimate Chattanooga response is about 118 km away in Fayetteville.
+        private const val MAX_BPF_RESOLVED_LOCATION_DISTANCE_KM = 100.0
+        private const val MAX_SPOT_RESOLVED_LOCATION_DISTANCE_KM = 200.0
+
         private fun createMetOfficeApi(): MetOfficeApiService {
             val moshi = Moshi.Builder()
                 .add(KotlinJsonAdapterFactory())

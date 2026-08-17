@@ -1,9 +1,12 @@
 package com.example.ui
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -111,6 +114,7 @@ import com.example.ui.theme.BentoPurplePrimary
 import com.example.ui.theme.BentoTextPrimary
 import com.example.ui.theme.BentoTextSecondary
 import com.example.ui.theme.BentoTile
+import com.example.widget.WidgetLocationHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,6 +135,31 @@ fun SettingsScreen(
     var isBpfApiKeyVisible by remember { mutableStateOf(false) }
     var isSecretVisible by remember { mutableStateOf(false) }
     var isHelpExpanded by remember { mutableStateOf(false) }
+    var widgetLocationPermissionGranted by remember {
+        mutableStateOf(WidgetLocationHelper.hasLocationPermission(context))
+    }
+    val widgetLocationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        widgetLocationPermissionGranted =
+            permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+                WidgetLocationHelper.hasLocationPermission(context)
+        if (widgetLocationPermissionGranted) {
+            viewModel.setWidgetUseGps(true)
+            Toast.makeText(
+                context,
+                "Widget set to GPS location (imprecise on refresh)",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(
+                context,
+                "Location permission was not granted. The GPS widget will not use another location.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     BackHandler {
         onBack()
@@ -1060,8 +1089,19 @@ fun SettingsScreen(
                         label = "GPS Location (Default)",
                         selected = uiState.widgetUseGps,
                         onClick = {
-                            viewModel.setWidgetUseGps(true)
-                            Toast.makeText(context, "Widget set to GPS location (imprecise on refresh)", Toast.LENGTH_SHORT).show()
+                            widgetLocationPermissionGranted =
+                                WidgetLocationHelper.hasLocationPermission(context)
+                            if (widgetLocationPermissionGranted) {
+                                viewModel.setWidgetUseGps(true)
+                                Toast.makeText(context, "Widget set to GPS location (imprecise on refresh)", Toast.LENGTH_SHORT).show()
+                            } else {
+                                widgetLocationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
                         },
                         modifier = Modifier.weight(1.2f).testTag("widget_location_gps")
                     )
@@ -1077,6 +1117,18 @@ fun SettingsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                if (uiState.widgetUseGps && !widgetLocationPermissionGranted) {
+                    Text(
+                        text = "Location access is unavailable. The widget will show a permission warning rather than data for another location.",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 if (!uiState.widgetUseGps) {
                     // Fixed Location Selector Card

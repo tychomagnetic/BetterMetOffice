@@ -76,10 +76,13 @@ class HourlyForecastWidget : GlanceAppWidget() {
 
             val appPrefs = PreferencesManager(context)
             val tempUnit = appPrefs.getTemperatureUnit()
-            val targetLocation = WidgetLocationHelper.getWidgetLocation(context, appPrefs)
-            val cachedReport = appPrefs.getCachedWidgetWeatherReport()?.takeIf { report ->
-                kotlin.math.abs(report.location.latitude - targetLocation.latitude) < 0.05 &&
-                    kotlin.math.abs(report.location.longitude - targetLocation.longitude) < 0.05
+            val resolvedLocation = WidgetLocationHelper.getWidgetLocation(context, appPrefs)
+            val targetLocation = resolvedLocation ?: unavailableGpsLocation(context)
+            val cachedReport = resolvedLocation?.let { location ->
+                appPrefs.getCachedWidgetWeatherReport()?.takeIf { report ->
+                    kotlin.math.abs(report.location.latitude - location.latitude) < 0.05 &&
+                        kotlin.math.abs(report.location.longitude - location.longitude) < 0.05
+                }
             }
 
             GlanceTheme {
@@ -138,7 +141,11 @@ fun HourlyForecastWidgetContent(
     }
     val currentItem = allHourly.getOrNull(nowIndex)
     val currentTemp = currentItem?.let { tempUnit.format(it.temperatureCelsius) } ?: "--°"
-    val conditionDesc = currentItem?.weatherCode?.description ?: "Weather Forecast"
+    val conditionDesc = currentItem?.weatherCode?.description ?: when (selectedLocation.id) {
+        "widget_gps_permission_required" -> "Open app to grant access"
+        "widget_gps_location_unavailable" -> "Waiting for a location fix"
+        else -> "Weather Forecast"
+    }
     val maxOffset = (allHourly.size - nowIndex - 5).coerceAtLeast(0)
     val clampedOffset = pageOffset.coerceIn(0, maxOffset)
     val effectiveStartIndex = (nowIndex + clampedOffset).coerceIn(0, (allHourly.size - 1).coerceAtLeast(0))
@@ -445,6 +452,7 @@ class RefreshWeatherActionCallback : ActionCallback {
             try {
                 val prefs = PreferencesManager(context)
                 val location = WidgetLocationHelper.getWidgetLocation(context, prefs)
+                    ?: return@withContext
                 val repository = WeatherRepository(prefs)
                 val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->
@@ -462,6 +470,25 @@ class RefreshWeatherActionCallback : ActionCallback {
         }
         HourlyForecastWidget().update(context, glanceId)
     }
+}
+
+private fun unavailableGpsLocation(context: Context): LocationItem {
+    val permissionGranted = WidgetLocationHelper.hasLocationPermission(context)
+    return LocationItem(
+        id = if (permissionGranted) {
+            "widget_gps_location_unavailable"
+        } else {
+            "widget_gps_permission_required"
+        },
+        name = if (permissionGranted) {
+            "Current location unavailable"
+        } else {
+            "Location permission required"
+        },
+        latitude = 1000.0,
+        longitude = 1000.0,
+        isCurrentLocation = true
+    )
 }
 
 class ResetToNowActionCallback : ActionCallback {

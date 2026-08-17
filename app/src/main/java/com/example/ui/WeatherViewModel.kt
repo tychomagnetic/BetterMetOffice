@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.PreferencesManager
@@ -86,6 +87,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     private var searchJob: Job? = null
     private var geocodeTestJob: Job? = null
+    private var weatherLoadJob: Job? = null
 
     init {
         val initialLocation = preferencesManager.getSelectedLocation()
@@ -156,7 +158,9 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         isRefresh: Boolean = false,
         useFreshBpfCache: Boolean = !isRefresh
     ) {
-        viewModelScope.launch {
+        weatherLoadJob?.cancel()
+        weatherLoadJob = viewModelScope.launch {
+            val requestedSource = _uiState.value.forecastSource
             if (isRefresh) {
                 _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
             } else {
@@ -179,6 +183,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
             val result = repository.getWeatherReport(updatedLocation)
             result.onSuccess { report ->
+                showFallbackToastIfNeeded(requestedSource, report.dataSource)
                 applyWeatherReport(report, updatedLocation)
             }.onFailure { error ->
                 _uiState.update {
@@ -190,6 +195,27 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
+    }
+
+    private fun showFallbackToastIfNeeded(
+        requestedSource: ForecastSource,
+        actualSource: WeatherDataSource
+    ) {
+        if (requestedSource != ForecastSource.MET_OFFICE_BPF || actualSource == WeatherDataSource.MET_OFFICE_BPF) {
+            return
+        }
+
+        val fallbackName = when (actualSource) {
+            WeatherDataSource.MET_OFFICE_DATAHUB,
+            WeatherDataSource.MET_OFFICE_DATAPOINT -> "Met Office Spot"
+            WeatherDataSource.OPEN_METEO_METEOROLOGICAL -> "Open-Meteo open data"
+            WeatherDataSource.MET_OFFICE_BPF -> return
+        }
+        Toast.makeText(
+            getApplication<Application>().applicationContext,
+            "BPF forecast unavailable. Falling back to $fallbackName.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun applyWeatherReport(report: WeatherReport, location: LocationItem) {
@@ -216,7 +242,17 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     fun selectLocation(location: LocationItem) {
         val isFav = isFavoriteLocation(location, _uiState.value.favoriteLocations)
         val updatedLocation = location.copy(isFavorite = isFav)
-        _uiState.update { it.copy(selectedLocation = updatedLocation, isLocationSheetOpen = false) }
+        _uiState.update { current ->
+            val existingReport = current.weatherReport?.takeIf { report ->
+                kotlin.math.abs(report.location.latitude - updatedLocation.latitude) < 0.0001 &&
+                    kotlin.math.abs(report.location.longitude - updatedLocation.longitude) < 0.0001
+            }
+            current.copy(
+                weatherReport = existingReport,
+                selectedLocation = updatedLocation,
+                isLocationSheetOpen = false
+            )
+        }
         loadWeather(updatedLocation)
     }
 

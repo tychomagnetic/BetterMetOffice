@@ -239,10 +239,10 @@ class PreferencesManager(context: Context) {
         nowMillis: Long = System.currentTimeMillis()
     ): WeatherReport? {
         val locationCacheKey = bpfCacheKey(location)
-        val locationJson = prefs.getString(locationCacheKey, null)
-        // Adopt the pre-existing single app cache after upgrading, provided it
-        // belongs to this location and is still within the freshness window.
-        val json = locationJson ?: prefs.getString(KEY_CACHED_WEATHER_REPORT, null) ?: return null
+        // Only entries written into the current verified, per-location cache are
+        // eligible. Older reports did not retain enough server-coordinate data
+        // to prove they belong to the requested location.
+        val json = prefs.getString(locationCacheKey, null) ?: return null
         val report = try {
             weatherReportAdapter.fromJson(json)
         } catch (_: Exception) {
@@ -258,7 +258,6 @@ class PreferencesManager(context: Context) {
                 ageMillis in 0..maxAgeMillis
         } ?: return null
 
-        if (locationJson == null) setCachedBpfWeatherReport(freshReport)
         return freshReport
     }
 
@@ -337,7 +336,14 @@ class PreferencesManager(context: Context) {
             } catch (_: Exception) {
             }
         }
-        return getSelectedLocation()
+        // Migration for installs that pre-date the dedicated widget location.
+        // Freeze the current app location once instead of dynamically following
+        // every later location selected in the main app.
+        val initialFixedLocation = getSelectedLocation()
+        prefs.edit()
+            .putString(KEY_WIDGET_FIXED_LOCATION, locationAdapter.toJson(initialFixedLocation))
+            .apply()
+        return initialFixedLocation
     }
 
     fun setWidgetFixedLocation(location: LocationItem) {
@@ -360,7 +366,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_FORECAST_SOURCE = "forecast_source"
         private const val KEY_CACHED_WEATHER_REPORT = "cached_weather_report"
         private const val KEY_CACHED_WIDGET_WEATHER_REPORT = "cached_widget_weather_report"
-        private const val KEY_CACHED_BPF_LOCATION_PREFIX = "cached_bpf_location_"
+        private const val KEY_CACHED_BPF_LOCATION_PREFIX = "cached_bpf_location_v3_"
         private const val KEY_WIDGET_PAGE_OFFSET = "widget_page_offset"
         private const val KEY_WIDGET_REFRESH_INTERVAL = "widget_refresh_interval"
         private const val KEY_WIDGET_USE_GPS = "widget_use_gps"

@@ -66,4 +66,29 @@ object BpfIntervalUtils {
         }
         return aligned
     }
+
+    /**
+     * Retains the API's validity timestamp and optionally carries a sparse
+     * period value forward until the next validity time. This is appropriate
+     * for precipitation probabilities shown beside Spot values, whose labels
+     * are also their validity times.
+     */
+    fun expandFromValidityTime(
+        series: Map<String, Double>,
+        intervalHours: Int
+    ): Map<String, Double> {
+        if (intervalHours <= 1 || series.isEmpty()) return series
+
+        val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        val expanded = linkedMapOf<String, Double>()
+        series.forEach { (validityTime, value) ->
+            val validityMillis = TimezoneUtils.parseIsoToMillis(validityTime) ?: return@forEach
+            repeat(intervalHours) { hourOffset ->
+                expanded[formatter.format(Date(validityMillis + hourOffset * 60L * 60L * 1000L))] = value
+            }
+        }
+        return expanded
+    }
 }

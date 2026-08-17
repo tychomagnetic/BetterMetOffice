@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.data.local.PreferencesManager
 import com.example.data.model.LocationItem
+import com.example.data.util.TimezoneUtils
 import java.util.Locale
 
 object WidgetLocationHelper {
@@ -19,9 +20,10 @@ object WidgetLocationHelper {
 
     /**
      * Resolves the target location for the widget based on user preferences.
-     * Defaults to imprecise GPS/network location, falling back to fixed location or app location.
+     * Returns null when GPS mode is selected but permission/a location fix is unavailable.
+     * It must not silently substitute a fixed or app-selected location.
      */
-    fun getWidgetLocation(context: Context, prefs: PreferencesManager): LocationItem {
+    fun getWidgetLocation(context: Context, prefs: PreferencesManager): LocationItem? {
         val useGps = prefs.isWidgetGpsEnabled()
         if (!useGps) {
             return prefs.getWidgetFixedLocation()
@@ -34,26 +36,26 @@ object WidgetLocationHelper {
             return gpsLoc
         }
 
-        // Fallback if location fix not yet available
-        Log.d(TAG, "Imprecise GPS location unavailable, falling back to fixed/selected location")
-        return prefs.getWidgetFixedLocation()
+        Log.d(TAG, "Imprecise GPS location unavailable; refusing to substitute another location")
+        return null
     }
+
+    fun hasLocationPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
 
     /**
      * Obtains the last known coarse/imprecise location (Network or Passive provider preferred for battery & privacy).
      */
     fun getImpreciseLocation(context: Context): LocationItem? {
         try {
-            val hasCoarse = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            val hasFine = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasCoarse && !hasFine) {
+            if (!hasLocationPermission(context)) {
                 Log.d(TAG, "Location permissions not granted for widget GPS refresh")
                 return null
             }
@@ -89,10 +91,14 @@ object WidgetLocationHelper {
                     id = "widget_gps_current",
                     name = resolvedName,
                     region = null,
-                    country = "United Kingdom",
+                    country = null,
                     latitude = bestLocation.latitude,
                     longitude = bestLocation.longitude,
-                    timezone = "Europe/London",
+                    timezone = TimezoneUtils.findApproximateTimeZone(
+                        bestLocation.latitude,
+                        bestLocation.longitude,
+                        country = null
+                    ).id,
                     isCurrentLocation = true
                 )
             }

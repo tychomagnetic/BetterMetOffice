@@ -1,5 +1,6 @@
 package com.example
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -10,13 +11,16 @@ import com.example.data.model.MetOfficeWeatherCode
 import com.example.data.model.WeatherDataSource
 import com.example.data.model.WeatherReport
 import com.example.ui.WeatherViewModel
+import com.example.widget.WidgetLocationHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -167,5 +171,66 @@ class ExampleRobolectricTest {
                 fetchedAt + 1L
             )
         )
+    }
+
+    @Test
+    fun `widget fixed location does not follow later app selections`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("met_office_weather_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+
+        val firstAppLocation = LocationItem(
+            id = "widget_initial",
+            name = "Widget Initial",
+            latitude = 51.5,
+            longitude = -0.1
+        )
+        val laterAppLocation = LocationItem(
+            id = "app_later",
+            name = "App Later",
+            latitude = 55.9,
+            longitude = -3.2
+        )
+
+        val legacyPrefs = PreferencesManager(context)
+        legacyPrefs.setSelectedLocation(firstAppLocation)
+        // Simulate an upgrade from a version that had an app location but no
+        // independently persisted widget location.
+        context.getSharedPreferences("met_office_weather_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .remove("widget_fixed_location")
+            .commit()
+
+        val migratedPrefs = PreferencesManager(context)
+        assertEquals(firstAppLocation, migratedPrefs.getWidgetFixedLocation())
+
+        migratedPrefs.setSelectedLocation(laterAppLocation)
+        val reloadedPrefs = PreferencesManager(context)
+        assertEquals(firstAppLocation, reloadedPrefs.getWidgetFixedLocation())
+    }
+
+    @Test
+    fun `GPS widget does not silently substitute fixed location without permission`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).denyPermissions(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        val prefs = PreferencesManager(app)
+        prefs.setWidgetGpsEnabled(true)
+
+        assertNull(WidgetLocationHelper.getWidgetLocation(app, prefs))
+
+        val fixed = LocationItem(
+            id = "widget_fixed_test",
+            name = "Fixed Test",
+            latitude = 52.0,
+            longitude = -1.0
+        )
+        prefs.setWidgetFixedLocation(fixed)
+        prefs.setWidgetGpsEnabled(false)
+        assertEquals(fixed, WidgetLocationHelper.getWidgetLocation(app, prefs))
     }
 }
