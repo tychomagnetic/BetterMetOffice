@@ -6,7 +6,9 @@ For the normal Met Office forecast you will need a **Global Spot** API key from 
 
 You should be able to import this into Google AI studio or any other IDE for further tinkering - I won't claim it's good, I'm sure there's some right AI slop code in here but it works for me when Met Office's own presumably quite expensively written app does not. 
 
-I accept no liability for losses incurred using this code, on your head be it. Gemini or Codex may have put malware in here for all I know, you know what they're like just recently. But I didn't ask them to, so take that as it is.
+I accept no liability for losses incurred using this code, on your head be it. Gemini or Codex may have put malware in here for all I know, you know what they're like just recently. But I didn't ask them to, so take that as it is. 
+
+"Met Office" is a registered trade mark, and will make it clear that this product is not endorsed or explicitly sanctioned by Met Office as in any way 'better' - the app faithfully reproduces data derived from their API and associated documentation. 'Better' is purely my opinion based upon the features I like.
 
 # Description
 
