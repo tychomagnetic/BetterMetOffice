@@ -147,7 +147,16 @@ class WeatherRepository(
 
         if (selectedSource == ForecastSource.MET_OFFICE_BPF && bpfApiKey.isNotBlank()) {
             try {
-                return@withContext Result.success(fetchBpfWeatherReport(location, bpfApiKey, startTime, timestamp))
+                return@withContext Result.success(
+                    fetchBpfWeatherReport(
+                        location = location,
+                        apiKey = bpfApiKey,
+                        spotApiKey = apiKey,
+                        spotClientSecret = clientSecret,
+                        startTime = startTime,
+                        timestamp = timestamp
+                    )
+                )
             } catch (_: Exception) {
                 // BPF is deliberately allowed to fall back to the free source if its limited service is unavailable.
             }
@@ -277,7 +286,7 @@ class WeatherRepository(
                     ApiDebugInfo(
                         location = location,
                         dataSource = WeatherDataSource.OPEN_METEO_METEOROLOGICAL,
-                        requestUrl = "https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,is_day&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation_probability,weather_code,surface_pressure,visibility,wind_speed_10m,wind_direction_10m,uv_index,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_gusts_10m_max&timezone=auto&forecast_days=7",
+                        requestUrl = "https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=${OpenMeteoApiService.CURRENT_PARAMETERS}&hourly=${OpenMeteoApiService.HOURLY_PARAMETERS}&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max&timezone=auto&forecast_days=7&wind_speed_unit=mph",
                         httpStatusCode = response.code(),
                         httpMessage = response.message().ifBlank { "OK" },
                         responseTimeMs = duration,
@@ -539,9 +548,80 @@ class WeatherRepository(
      * request for deterministic weather values and one probability request for PoP.
      * No collection/instance discovery requests are made by the app.
      */
+    private suspend fun fetchSpotFallbackReport(
+        location: LocationItem,
+        apiKey: String,
+        clientSecret: String
+    ): WeatherReport? {
+        if (apiKey.isBlank()) return null
+
+        return try {
+            val (hourlyResponse, threeHourlyResponse, dailyResponse) = coroutineScope {
+                val hourly = async {
+                    metOfficeApi.getPointHourly(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        apiKey = apiKey,
+                        clientId = apiKey,
+                        clientSecret = clientSecret.ifBlank { null }
+                    )
+                }
+                val threeHourly = async {
+                    runCatching {
+                        metOfficeApi.getPointThreeHourly(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            apiKey = apiKey,
+                            clientId = apiKey,
+                            clientSecret = clientSecret.ifBlank { null }
+                        )
+                    }.getOrNull()
+                }
+                val daily = async {
+                    runCatching {
+                        metOfficeApi.getPointDaily(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            apiKey = apiKey,
+                            clientId = apiKey,
+                            clientSecret = clientSecret.ifBlank { null }
+                        )
+                    }.getOrNull()
+                }
+                Triple(hourly.await(), threeHourly.await(), daily.await())
+            }
+
+            val hourlyBody = hourlyResponse.body()
+            if (!hourlyResponse.isSuccessful || hourlyBody == null) return null
+            val feature = hourlyBody.features?.firstOrNull()
+            val coordinates = feature?.geometry?.coordinates
+            requireResolvedLocationMatchesRequest(
+                requested = location,
+                resolvedLatitude = coordinates?.getOrNull(1),
+                resolvedLongitude = coordinates?.getOrNull(0),
+                sourceName = "Met Office Spot",
+                maximumDistanceKm = MAX_SPOT_RESOLVED_LOCATION_DISTANCE_KM
+            )
+            mapMetOfficeResponse(
+                location = location,
+                hourly = hourlyBody,
+                threeHourly = threeHourlyResponse
+                    ?.takeIf { it.isSuccessful }
+                    ?.body(),
+                daily = dailyResponse
+                    ?.takeIf { it.isSuccessful }
+                    ?.body()
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private suspend fun fetchBpfWeatherReport(
         location: LocationItem,
         apiKey: String,
+        spotApiKey: String,
+        spotClientSecret: String,
         startTime: Long,
         timestamp: String
     ): WeatherReport {
@@ -581,13 +661,18 @@ class WeatherRepository(
         }
         val percentileJson = percentileResponse.body()?.string()
             ?: throw IllegalStateException("BPF percentile request failed (HTTP ${percentileResponse.code()})")
-        val probabilityJson = if (probabilityResponse.isSuccessful) probabilityResponse.body()?.string() else null
-        probabilityResponse.errorBody()?.close()
+        if (!probabilityResponse.isSuccessful) {
+            probabilityResponse.errorBody()?.close()
+            throw IllegalStateException("BPF probability request failed (HTTP ${probabilityResponse.code()})")
+        }
+        val probabilityJson = probabilityResponse.body()?.string()
+            ?: throw IllegalStateException("BPF probability request returned an empty payload")
 
         val coverageAdapter = moshi.adapter(BpfCoverageCollection::class.java)
         val percentileCollection = coverageAdapter.fromJson(percentileJson)
             ?: throw IllegalStateException("BPF returned an unreadable percentile payload")
-        val probabilityCollection = probabilityJson?.let { coverageAdapter.fromJson(it) }
+        val probabilityCollection = coverageAdapter.fromJson(probabilityJson)
+            ?: throw IllegalStateException("BPF returned an unreadable probability payload")
         val firstCoverage = percentileCollection.coverages.firstOrNull()
         val axes = firstCoverage?.domain?.axes.orEmpty()
         val resolvedLon = (axes["x"]?.values?.firstOrNull() as? Number)?.toDouble()
@@ -605,7 +690,7 @@ class WeatherRepository(
         val temperatures = bpfSeries(percentileCollection, "airTemperature1p5m")
         val sourceTimes = temperatures.keys.toList()
         if (sourceTimes.isEmpty()) throw IllegalStateException("BPF returned no hourly temperature values")
-        val times = BpfIntervalUtils.expandHourlyTimeline(sourceTimes)
+        val expandedTimes = BpfIntervalUtils.expandHourlyTimeline(sourceTimes)
 
         val feelsLike = bpfSeries(percentileCollection, "feelsLikeTemperature1p5m")
         val humidity = bpfSeries(percentileCollection, "relativeHumidity1p5m")
@@ -647,26 +732,28 @@ class WeatherRepository(
         // value with bounds 15:00-16:00 is therefore displayed at 16:00, not
         // moved back to 15:00. This also makes its label comparable with Spot,
         // whose PoP is centred on its validity time.
-        val hourlyPrecipitationProbability = probabilityCollection?.let {
-            bpfSeries(
-                it,
-                "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h"
-            )
-        }.orEmpty()
-        val threeHourlyPrecipitationProbability = probabilityCollection?.let {
-            BpfIntervalUtils.expandFromValidityTime(
-                series = bpfSeries(
-                    it,
-                    "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h"
-                ),
-                intervalHours = 3
-            )
-        }.orEmpty()
+        val hourlyPrecipitationProbability = bpfSeries(
+            probabilityCollection,
+            "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h"
+        )
+        val threeHourlyPrecipitationProbability = BpfIntervalUtils.expandFromValidityTime(
+            series = bpfSeries(
+                probabilityCollection,
+                "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h"
+            ),
+            intervalHours = 3
+        )
+        require(hourlyPrecipitationProbability.isNotEmpty()) {
+            "BPF probability payload contains no one-hour precipitation probabilities"
+        }
+        require(threeHourlyPrecipitationProbability.isNotEmpty()) {
+            "BPF probability payload contains no three-hour precipitation probabilities"
+        }
 
         // The Met Office consumer forecast changes to its reduced three-hour view
         // on the sixth local forecast day. Preserve its last midnight hourly slot,
         // then switch at the first PT03H interval beginning on that day.
-        val forecastDates = times
+        val forecastDates = expandedTimes
             .map { TimezoneUtils.getForecastLocalDate(it, location) }
             .distinct()
             .take(7)
@@ -682,69 +769,175 @@ class WeatherRepository(
             (TimezoneUtils.parseIsoToMillis(time) ?: Long.MIN_VALUE) >= start
         } == true
 
-        val displayWindGust = times.associateWith { time ->
-            if (isReducedForecastTime(time)) {
-                threeHourlyWindGust[time]
-                    ?: bpfLatestSeriesValue(hourlyWindGust, time, maxDifferenceHours = 2)
-            } else {
-                hourlyWindGust[time] ?: threeHourlyWindGust[time]
+        fun weatherCodeAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            threeHourlyWeatherCode[time] ?: hourlyWeatherCode[time]
+        } else {
+            hourlyWeatherCode[time] ?: threeHourlyWeatherCode[time]
+        }
+
+        fun precipitationProbabilityAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            threeHourlyPrecipitationProbability[time] ?: hourlyPrecipitationProbability[time]
+        } else {
+            hourlyPrecipitationProbability[time] ?: threeHourlyPrecipitationProbability[time]
+        }
+
+        fun temperatureAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(temperatures, time, maxDifferenceHours = 2)
+        } else temperatures[time]
+
+        fun feelsLikeAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(feelsLike, time, maxDifferenceHours = 2)
+        } else feelsLike[time]
+
+        fun humidityAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(humidity, time, maxDifferenceHours = 2)
+        } else humidity[time]
+
+        fun windSpeedAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(windSpeed, time, maxDifferenceHours = 2)
+        } else windSpeed[time]
+
+        fun windDirectionAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(windDirection, time, maxDifferenceHours = 2)
+        } else windDirection[time]
+
+        fun pressureAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(pressure, time, maxDifferenceHours = 2)
+        } else pressure[time]
+
+        fun uvAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            bpfLatestSeriesValue(ultravioletIndex, time, maxDifferenceHours = 2)
+        } else {
+            bpfNearestSeriesValue(ultravioletIndex, time, maxDifferenceHours = 2)
+        }
+
+        fun windGustAt(time: String): Double? = if (isReducedForecastTime(time)) {
+            threeHourlyWindGust[time]
+                ?: bpfLatestSeriesValue(hourlyWindGust, time, maxDifferenceHours = 2)
+        } else {
+            hourlyWindGust[time] ?: threeHourlyWindGust[time]
+        }
+
+        val expandedCurrentIndex = TimezoneUtils.findCurrentHourItemIndex(
+            expandedTimes,
+            System.currentTimeMillis(),
+            location
+        ).coerceIn(0, expandedTimes.lastIndex)
+        val currentExpandedTime = expandedTimes[expandedCurrentIndex]
+        val hasMissingBpfData = expandedTimes.drop(expandedCurrentIndex).any { time ->
+            weatherCodeAt(time)?.roundToInt() !in 0..30 ||
+                precipitationProbabilityAt(time) == null ||
+                temperatureAt(time) == null ||
+                feelsLikeAt(time) == null ||
+                humidityAt(time) == null ||
+                windSpeedAt(time) == null ||
+                windDirectionAt(time) == null ||
+                pressureAt(time) == null ||
+                uvAt(time) == null ||
+                windGustAt(time) == null
+        } || visibility[currentExpandedTime] == null || windGustAt(currentExpandedTime) == null
+        val spotFallbackReport = if (hasMissingBpfData) {
+            fetchSpotFallbackReport(location, spotApiKey, spotClientSecret)
+        } else null
+        val spotHoursByTime = spotFallbackReport
+            ?.hourly
+            ?.mapNotNull { item ->
+                TimezoneUtils.parseIsoToMillis(item.fullTime)?.let { it to item }
             }
+            ?.toMap()
+            .orEmpty()
+        fun spotAt(time: String): HourlyForecastItem? =
+            TimezoneUtils.parseIsoToMillis(time)?.let(spotHoursByTime::get)
+        val spotDaysByDate = spotFallbackReport?.daily?.associateBy { it.date }.orEmpty()
+
+        val times = BpfIntervalUtils.trimIncompleteTail(expandedTimes) { time ->
+            (precipitationProbabilityAt(time) != null || spotAt(time) != null) &&
+                (weatherCodeAt(time)?.roundToInt() in 0..30 || spotAt(time) != null)
+        }
+        require(times.isNotEmpty()) {
+            "BPF contains no complete forecast timestamps"
+        }
+
+        val displayWindGust = times.associateWith { time ->
+            windGustAt(time)
         }
 
         val currentIndex = TimezoneUtils.findCurrentHourItemIndex(times, System.currentTimeMillis(), location)
             .coerceIn(0, times.lastIndex)
+        val missingProbabilityTimes = times.drop(currentIndex).filter {
+            precipitationProbabilityAt(it) == null && spotAt(it) == null
+        }
+        require(missingProbabilityTimes.isEmpty()) {
+            "BPF probability payload is incomplete from ${missingProbabilityTimes.first()}"
+        }
+        val invalidWeatherCodeTime = times.drop(currentIndex).firstOrNull { time ->
+            weatherCodeAt(time)?.roundToInt() !in 0..30 && spotAt(time) == null
+        }
+        require(invalidWeatherCodeTime == null) {
+            "BPF weather-code payload is incomplete or invalid from $invalidWeatherCodeTime"
+        }
+        var partialSpotFallbackUsed = false
         val hourly = times.mapIndexed { index, time ->
             val isNight = TimezoneUtils.isNightTime(time, location)
-            val useReducedForecast = isReducedForecastTime(time)
-            val conditionCode = if (useReducedForecast) {
-                threeHourlyWeatherCode[time] ?: hourlyWeatherCode[time]
-            } else {
-                hourlyWeatherCode[time] ?: threeHourlyWeatherCode[time]
-            }
-            val precipitationProbability = if (useReducedForecast) {
-                threeHourlyPrecipitationProbability[time] ?: hourlyPrecipitationProbability[time]
-            } else {
-                hourlyPrecipitationProbability[time] ?: threeHourlyPrecipitationProbability[time]
-            }
-            val temperature = if (useReducedForecast) {
-                bpfLatestSeriesValue(temperatures, time, maxDifferenceHours = 2)
-            } else temperatures[time]
-            val feelsLikeTemperature = if (useReducedForecast) {
-                bpfLatestSeriesValue(feelsLike, time, maxDifferenceHours = 2)
-            } else feelsLike[time]
-            val relativeHumidity = if (useReducedForecast) {
-                bpfLatestSeriesValue(humidity, time, maxDifferenceHours = 2)
-            } else humidity[time]
-            val sustainedWindSpeed = if (useReducedForecast) {
-                bpfLatestSeriesValue(windSpeed, time, maxDifferenceHours = 2)
-            } else windSpeed[time]
-            val sustainedWindDirection = if (useReducedForecast) {
-                bpfLatestSeriesValue(windDirection, time, maxDifferenceHours = 2)
-            } else windDirection[time]
-            val seaLevelPressure = if (useReducedForecast) {
-                bpfLatestSeriesValue(pressure, time, maxDifferenceHours = 2)
-            } else pressure[time]
-            val uvValue = if (useReducedForecast) {
-                bpfLatestSeriesValue(ultravioletIndex, time, maxDifferenceHours = 2)
-            } else {
-                bpfNearestSeriesValue(ultravioletIndex, time, maxDifferenceHours = 2)
+            val conditionCode = weatherCodeAt(time)
+            val precipitationProbability = precipitationProbabilityAt(time)
+            val spotItem = spotAt(time)
+            val temperature = temperatureAt(time)
+            val feelsLikeTemperature = feelsLikeAt(time)
+            val relativeHumidity = humidityAt(time)
+            val sustainedWindSpeed = windSpeedAt(time)
+            val sustainedWindDirection = windDirectionAt(time)
+            val seaLevelPressure = pressureAt(time)
+            val uvValue = uvAt(time)
+            val bpfWeatherCodeIsValid = conditionCode?.roundToInt() in 0..30
+            if (
+                spotItem != null &&
+                (!bpfWeatherCodeIsValid ||
+                    precipitationProbability == null ||
+                    temperature == null ||
+                    feelsLikeTemperature == null ||
+                    relativeHumidity == null ||
+                    sustainedWindSpeed == null ||
+                    sustainedWindDirection == null ||
+                    seaLevelPressure == null ||
+                    uvValue == null)
+            ) {
+                partialSpotFallbackUsed = true
             }
             HourlyForecastItem(
                 timeLabel = TimezoneUtils.formatHourLabel(time, location, index == currentIndex),
                 fullTime = time,
                 date = TimezoneUtils.getForecastLocalDate(time, location),
-                temperatureCelsius = kelvinToCelsius(temperature ?: 273.15),
-                feelsLikeCelsius = kelvinToCelsius(feelsLikeTemperature ?: temperature ?: 273.15),
-                weatherCode = MetOfficeWeatherCode.fromCode(conditionCode?.toInt(), isNight),
-                precipitationChance = probabilityToPercent(precipitationProbability),
-                windSpeedMph = metresPerSecondToMph(sustainedWindSpeed),
-                windDirectionDegrees = sustainedWindDirection?.toInt() ?: 0,
-                humidityPercent = relativeHumidityToPercent(relativeHumidity),
+                temperatureCelsius = temperature?.let(::kelvinToCelsius)
+                    ?: spotItem?.temperatureCelsius
+                    ?: 0.0,
+                feelsLikeCelsius = feelsLikeTemperature?.let(::kelvinToCelsius)
+                    ?: temperature?.let(::kelvinToCelsius)
+                    ?: spotItem?.feelsLikeCelsius
+                    ?: 0.0,
+                weatherCode = if (bpfWeatherCodeIsValid) {
+                    MetOfficeWeatherCode.fromCode(conditionCode?.toInt(), isNight)
+                } else spotItem?.weatherCode ?: MetOfficeWeatherCode.fromCode(null, isNight),
+                precipitationChance = precipitationProbability?.let(::probabilityToPercent)
+                    ?: spotItem?.precipitationChance
+                    ?: 0,
+                windSpeedMph = sustainedWindSpeed?.let(::metresPerSecondToMph)
+                    ?: spotItem?.windSpeedMph
+                    ?: 0.0,
+                windDirectionDegrees = sustainedWindDirection?.toInt()
+                    ?: spotItem?.windDirectionDegrees
+                    ?: 0,
+                humidityPercent = relativeHumidity?.let(::relativeHumidityToPercent)
+                    ?: spotItem?.humidityPercent
+                    ?: 65,
                 uvIndex = uvValue
                     ?.roundToInt()
                     ?.coerceAtLeast(0)
+                    ?: spotItem?.uvIndex
                     ?: 0,
-                pressureHpa = pascalsToHpa(seaLevelPressure),
+                pressureHpa = seaLevelPressure?.let(::pascalsToHpa)
+                    ?: spotItem?.pressureHpa
+                    ?: 1013.25,
                 isNow = index == currentIndex
             )
         }
@@ -759,6 +952,16 @@ class WeatherRepository(
                 val nightItem = items.firstOrNull { TimezoneUtils.isNightTime(it.fullTime, location) } ?: dayItem
                 val dayInfo = TimezoneUtils.formatDayOfWeek(date, location)
                 val sunTimes = TimezoneUtils.calculateSunTimes(date, location)
+                val bpfGustsMph = items.mapNotNull { item ->
+                    displayWindGust[item.fullTime]?.let(::metresPerSecondToMph)
+                }
+                val spotDay = spotDaysByDate[date]
+                val maxWindGustMph = if (bpfGustsMph.size < items.size && spotDay != null) {
+                    partialSpotFallbackUsed = true
+                    maxOf(bpfGustsMph.maxOrNull() ?: 0.0, spotDay.maxWindGustMph)
+                } else {
+                    bpfGustsMph.maxOrNull() ?: 0.0
+                }
                 DailyForecastItem(
                     date = date,
                     dayOfWeek = dayInfo.first,
@@ -769,9 +972,7 @@ class WeatherRepository(
                     nightWeatherCode = nightItem.weatherCode,
                     precipitationChance = items.maxOf { it.precipitationChance },
                     uvIndex = items.maxOf { it.uvIndex },
-                    maxWindGustMph = items.maxOf { item ->
-                        metresPerSecondToMph(displayWindGust[item.fullTime] ?: 0.0)
-                    },
+                    maxWindGustMph = maxWindGustMph,
                     sunrise = sunTimes.first,
                     sunset = sunTimes.second
                 )
@@ -780,6 +981,16 @@ class WeatherRepository(
         val currentTime = times[currentIndex]
         val currentDay = daily.firstOrNull { it.date == TimezoneUtils.getForecastLocalDate(currentTime, location) } ?: daily.first()
         val currentIsNight = TimezoneUtils.isNightTime(currentTime, location)
+        val spotCurrent = spotFallbackReport?.current?.takeIf {
+            TimezoneUtils.parseIsoToMillis(it.timestamp) == TimezoneUtils.parseIsoToMillis(currentTime)
+        }
+        val currentVisibility = visibility[currentTime]?.toInt()
+            ?: spotCurrent?.visibilityMeters?.also { partialSpotFallbackUsed = true }
+            ?: 0
+        val currentWindGustMph = displayWindGust[currentTime]
+            ?.let(::metresPerSecondToMph)
+            ?: spotCurrent?.windGustMph?.also { partialSpotFallbackUsed = true }
+            ?: hourly[currentIndex].windSpeedMph
         _debugInfo.update { old ->
             ApiDebugInfo(
                 location = location,
@@ -789,7 +1000,7 @@ class WeatherRepository(
                 httpMessage = percentileResponse.message().ifBlank { "OK" },
                 responseTimeMs = System.currentTimeMillis() - startTime,
                 rawJsonHourly = "CoverageJSON BPF percentile payload: ${percentileCollection.coverages.size} coverages; 50th percentile selected.",
-                rawJsonThreeHourly = "CoverageJSON BPF precipitation probability payload: ${probabilityCollection?.coverages?.size ?: 0} coverage(s); >0.0 one- and three-hour precipitation-amount thresholds selected.",
+                rawJsonThreeHourly = "CoverageJSON BPF precipitation probability payload: ${probabilityCollection.coverages.size} coverage(s); >0.0 one- and three-hour precipitation-amount thresholds selected.",
                 lastGeocodingQuery = old?.lastGeocodingQuery,
                 rawJsonGeocoding = old?.rawJsonGeocoding,
                 serverResolvedLat = resolvedLat,
@@ -809,11 +1020,11 @@ class WeatherRepository(
                 minTempCelsius = currentDay.minTempCelsius,
                 humidityPercent = hourly[currentIndex].humidityPercent,
                 windSpeedMph = hourly[currentIndex].windSpeedMph,
-                windGustMph = metresPerSecondToMph(displayWindGust[currentTime] ?: windSpeed[currentTime]),
+                windGustMph = currentWindGustMph,
                 windDirectionDegrees = hourly[currentIndex].windDirectionDegrees,
                 precipitationChance = hourly[currentIndex].precipitationChance,
                 uvIndex = hourly[currentIndex].uvIndex,
-                visibilityMeters = (visibility[currentTime] ?: 0.0).toInt(),
+                visibilityMeters = currentVisibility,
                 pressureHpa = hourly[currentIndex].pressureHpa,
                 timestamp = currentTime,
                 isNight = currentIsNight
@@ -823,7 +1034,9 @@ class WeatherRepository(
             dataSource = WeatherDataSource.MET_OFFICE_BPF,
             // The blended BPF CoverageJSON response has no model issue/reference
             // timestamp. Leave this empty so the UI accurately shows retrieval time.
-            modelRunTime = null
+            modelRunTime = null,
+            partialFallbackSource = WeatherDataSource.MET_OFFICE_DATAHUB
+                .takeIf { partialSpotFallbackUsed }
         )
     }
 
@@ -1005,6 +1218,7 @@ class WeatherRepository(
 
         // Merge hourly (48h) with three-hourly (up to 7 days) and interpolate so every day has full 24h
         val combinedTimeSeries = combineHourlyAndThreeHourly(rawHourlySeries, rawThreeHourlySeries)
+        require(combinedTimeSeries.isNotEmpty()) { "Met Office Spot returned no forecast time series" }
 
         // Find current time point for the ongoing active hour
         val nowUtcMillis = System.currentTimeMillis()
@@ -1015,7 +1229,7 @@ class WeatherRepository(
         )
         val currentItem = combinedTimeSeries.getOrNull(currentItemIndex)
             ?: combinedTimeSeries.firstOrNull()
-            ?: MetOfficeHourlyTimeSeriesItem()
+            ?: throw IllegalStateException("Met Office Spot returned no current forecast item")
 
         val dailySeries = daily?.features?.firstOrNull()?.properties?.timeSeries ?: emptyList()
 
@@ -1038,38 +1252,66 @@ class WeatherRepository(
             ?: validDailySeries.firstOrNull()
 
         val isNight = TimezoneUtils.isNightTime(currentItem.time, location)
-        val weatherCode = MetOfficeWeatherCode.fromCode(currentItem.significantWeatherCode, isNight)
+        val currentWeatherCode = requireNotNull(currentItem.significantWeatherCode) {
+            "Met Office Spot current weather code is missing"
+        }
+        require(currentWeatherCode in 0..30) {
+            "Met Office Spot current weather code is invalid: $currentWeatherCode"
+        }
+        val weatherCode = MetOfficeWeatherCode.fromCode(currentWeatherCode, isNight)
+
+        val currentTemperature = requireNotNull(extractTemp(currentItem)) {
+            "Met Office Spot current temperature is missing"
+        }
+        val currentHumidity = requireNotNull(currentItem.screenRelativeHumidity) {
+            "Met Office Spot current humidity is missing"
+        }
+        val currentWindSpeed = requireNotNull(currentItem.windSpeed10m) {
+            "Met Office Spot current wind speed is missing"
+        }
+        val currentWindDirection = requireNotNull(currentItem.windDirectionFrom10m) {
+            "Met Office Spot current wind direction is missing"
+        }
+        val currentPrecipitationProbability = requireNotNull(currentItem.probOfPrecipitation) {
+            "Met Office Spot current precipitation probability is missing"
+        }
+        val currentVisibility = requireNotNull(currentItem.visibility) {
+            "Met Office Spot current visibility is missing"
+        }
+        val currentPressure = requireNotNull(currentItem.mslp) {
+            "Met Office Spot current mean-sea-level pressure is missing"
+        }
 
         // Convert wind speed from m/s to mph (1 m/s = 2.23694 mph)
-        val windSpeedMph = (currentItem.windSpeed10m ?: 3.0) * 2.23694
-        val windGustMph = (currentItem.windGustSpeed10m ?: currentItem.windSpeed10m ?: 5.0) * 2.23694
+        val windSpeedMph = currentWindSpeed * 2.23694
+        val windGustMph = (currentItem.windGustSpeed10m ?: currentWindSpeed) * 2.23694
 
         // Pressure mslp in Pa -> hPa
-        val pressurePa = currentItem.mslp ?: 101325.0
+        val pressurePa = currentPressure
         val pressureHpa = if (pressurePa > 50000) pressurePa / 100.0 else pressurePa
 
         val todayHours = combinedTimeSeries.filter { (it.time?.take(10) ?: "") == todayDateStr }
         val maxTemp = todayDaily?.dayMaxScreenTemperature
             ?: todayHours.mapNotNull { it.screenTemperature }.maxOrNull()
-            ?: (currentItem.screenTemperature ?: 15.0)
+            ?: currentTemperature
 
         val minTemp = todayDaily?.nightMinScreenTemperature
             ?: todayHours.mapNotNull { it.screenTemperature }.minOrNull()
-            ?: ((currentItem.screenTemperature ?: 15.0) - 4.0)
+            ?: (currentTemperature - 4.0)
 
         val current = CurrentWeather(
-            temperatureCelsius = currentItem.screenTemperature ?: 15.0,
-            feelsLikeCelsius = currentItem.screenApparentTemperature ?: currentItem.screenTemperature ?: 15.0,
+            temperatureCelsius = currentTemperature,
+            feelsLikeCelsius = extractFeelsLike(currentItem) ?: currentTemperature,
             weatherCode = weatherCode,
             maxTempCelsius = maxTemp,
             minTempCelsius = minTemp,
-            humidityPercent = (currentItem.screenRelativeHumidity ?: 70.0).toInt(),
+            humidityPercent = currentHumidity.roundToInt(),
             windSpeedMph = windSpeedMph,
             windGustMph = windGustMph,
-            windDirectionDegrees = currentItem.windDirectionFrom10m ?: 180,
-            precipitationChance = currentItem.probOfPrecipitation ?: 0,
-            uvIndex = currentItem.uvIndex ?: 2,
-            visibilityMeters = currentItem.visibility ?: 15000,
+            windDirectionDegrees = currentWindDirection,
+            precipitationChance = currentPrecipitationProbability,
+            uvIndex = currentItem.uvIndex ?: 0,
+            visibilityMeters = currentVisibility,
             pressureHpa = pressureHpa,
             timestamp = currentItem.time ?: "",
             isNight = isNight
@@ -1512,73 +1754,114 @@ class WeatherRepository(
     }
 
     private fun mapOpenMeteoResponse(location: LocationItem, res: OpenMeteoResponse): WeatherReport {
-        val current = res.current
-        val hourly = res.hourly
-        val daily = res.daily
+        val current = requireNotNull(res.current) { "Open-Meteo returned no current conditions" }
+        val hourly = requireNotNull(res.hourly) { "Open-Meteo returned no hourly forecast" }
+        val daily = requireNotNull(res.daily) { "Open-Meteo returned no daily forecast" }
+        val reportLocation = res.timezone
+            ?.takeIf { it.isNotBlank() }
+            ?.let { location.copy(timezone = it) }
+            ?: location
 
-        val isNight = if (current?.isDay != null) {
+        val hourlyTimes = hourly.time.orEmpty()
+        require(hourlyTimes.isNotEmpty()) { "Open-Meteo returned no hourly forecast data" }
+        requireOpenMeteoSeriesSize("temperature_2m", hourly.temperature2m?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("relative_humidity_2m", hourly.relativeHumidity2m?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("apparent_temperature", hourly.apparentTemperature?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("precipitation_probability", hourly.precipitationProbability?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("weather_code", hourly.weatherCode?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("pressure_msl", hourly.pressureMsl?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("wind_speed_10m", hourly.windSpeed10m?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("wind_direction_10m", hourly.windDirection10m?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("uv_index", hourly.uvIndex?.size, hourlyTimes.size)
+        requireOpenMeteoSeriesSize("is_day", hourly.isDay?.size, hourlyTimes.size)
+
+        val dailyTimes = daily.time.orEmpty()
+        require(dailyTimes.isNotEmpty()) { "Open-Meteo returned no daily forecast data" }
+        requireOpenMeteoSeriesSize("daily weather_code", daily.weatherCode?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily temperature_2m_max", daily.temperature2mMax?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily temperature_2m_min", daily.temperature2mMin?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily sunrise", daily.sunrise?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily sunset", daily.sunset?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily uv_index_max", daily.uvIndexMax?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily precipitation_probability_max", daily.precipitationProbabilityMax?.size, dailyTimes.size)
+        requireOpenMeteoSeriesSize("daily wind_gusts_10m_max", daily.windGusts10mMax?.size, dailyTimes.size)
+
+        val closestHourIndex = TimezoneUtils.findCurrentHourItemIndex(
+            hourlyTimes,
+            System.currentTimeMillis(),
+            reportLocation
+        ).coerceIn(0, hourlyTimes.lastIndex)
+
+        val isNight = if (current.isDay != null) {
             current.isDay == 0
         } else {
-            TimezoneUtils.isNightTime(current?.time, location)
+            TimezoneUtils.isNightTime(current.time, reportLocation)
         }
-        val weatherCode = MetOfficeWeatherCode.fromWmoCode(current?.weatherCode ?: 0, isNight)
+        val currentWeatherCode = requireNotNull(current.weatherCode) {
+            "Open-Meteo current weather code is missing"
+        }
+        requireSupportedWmoCode(currentWeatherCode)
+        val weatherCode = MetOfficeWeatherCode.fromWmoCode(currentWeatherCode, isNight)
 
-        val maxTemp = daily?.temperature2mMax?.firstOrNull() ?: (current?.temperature2m ?: 15.0)
-        val minTemp = daily?.temperature2mMin?.firstOrNull() ?: ((current?.temperature2m ?: 15.0) - 5.0)
+        val currentTemperature = requireNotNull(current.temperature2m) {
+            "Open-Meteo current temperature is missing"
+        }
+        val maxTemp = daily.temperature2mMax?.firstOrNull() ?: currentTemperature
+        val minTemp = daily.temperature2mMin?.firstOrNull() ?: currentTemperature
+        val currentWindSpeed = requireNotNull(current.windSpeed10m) {
+            "Open-Meteo current wind speed is missing"
+        }
 
         val currentData = CurrentWeather(
-            temperatureCelsius = current?.temperature2m ?: 15.0,
-            feelsLikeCelsius = current?.apparentTemperature ?: current?.temperature2m ?: 15.0,
+            temperatureCelsius = currentTemperature,
+            feelsLikeCelsius = current.apparentTemperature ?: currentTemperature,
             weatherCode = weatherCode,
             maxTempCelsius = maxTemp,
             minTempCelsius = minTemp,
-            humidityPercent = current?.relativeHumidity2m ?: 65,
-            windSpeedMph = current?.windSpeed10m ?: 5.0,
-            windGustMph = current?.windGusts10m ?: current?.windSpeed10m ?: 8.0,
-            windDirectionDegrees = current?.windDirection10m ?: 180,
-            precipitationChance = hourly?.precipitationProbability?.firstOrNull() ?: 0,
-            uvIndex = (hourly?.uvIndex?.firstOrNull() ?: 3.0).toInt(),
-            visibilityMeters = (current?.visibility ?: 20000.0).toInt(),
-            pressureHpa = current?.surfacePressure ?: 1015.0,
-            timestamp = current?.time ?: "",
+            humidityPercent = requireNotNull(current.relativeHumidity2m) { "Open-Meteo current humidity is missing" },
+            windSpeedMph = currentWindSpeed,
+            windGustMph = current.windGusts10m ?: currentWindSpeed,
+            windDirectionDegrees = requireNotNull(current.windDirection10m) { "Open-Meteo current wind direction is missing" },
+            precipitationChance = current.precipitationProbability
+                ?: hourly.precipitationProbability?.getOrNull(closestHourIndex)
+                ?: 0,
+            uvIndex = (current.uvIndex
+                ?: hourly.uvIndex?.getOrNull(closestHourIndex)
+                ?: 0.0).roundToInt().coerceAtLeast(0),
+            visibilityMeters = requireNotNull(current.visibility) { "Open-Meteo current visibility is missing" }.toInt(),
+            pressureHpa = requireNotNull(current.pressureMsl) { "Open-Meteo current sea-level pressure is missing" },
+            timestamp = current.time ?: hourlyTimes[closestHourIndex],
             isNight = isNight
-        )
-
-        // Find index representing the ongoing active hour
-        val nowUtcMillis = System.currentTimeMillis()
-        val hourlyCount = hourly?.time?.size ?: 0
-        val closestHourIndex = TimezoneUtils.findCurrentHourItemIndex(
-            hourly?.time ?: emptyList(),
-            nowUtcMillis,
-            location
         )
 
         // Map hourly (all available hours across 7 days)
         val hourlyList = mutableListOf<HourlyForecastItem>()
-        for (i in 0 until hourlyCount) {
-            val time = hourly?.time?.getOrNull(i) ?: ""
-            val itemIsNight = if (hourly?.isDay?.getOrNull(i) != null) {
+        for (i in hourlyTimes.indices) {
+            val time = hourlyTimes[i]
+            val itemIsNight = if (hourly.isDay?.getOrNull(i) != null) {
                 (hourly.isDay.getOrNull(i) ?: 1) == 0
             } else {
-                TimezoneUtils.isNightTime(time, location)
+                TimezoneUtils.isNightTime(time, reportLocation)
             }
-            val code = MetOfficeWeatherCode.fromWmoCode(hourly?.weatherCode?.getOrNull(i) ?: 0, itemIsNight)
+            val hourlyWeatherCode = hourly.weatherCode.orEmpty()[i]
+            requireSupportedWmoCode(hourlyWeatherCode)
+            val code = MetOfficeWeatherCode.fromWmoCode(hourlyWeatherCode, itemIsNight)
             val isNowItem = i == closestHourIndex
 
             hourlyList.add(
                 HourlyForecastItem(
-                    timeLabel = TimezoneUtils.formatHourLabel(time, location, isNowItem),
+                    timeLabel = TimezoneUtils.formatHourLabel(time, reportLocation, isNowItem),
                     fullTime = time,
                     date = time.take(10),
-                    temperatureCelsius = hourly?.temperature2m?.getOrNull(i) ?: 15.0,
-                    feelsLikeCelsius = hourly?.apparentTemperature?.getOrNull(i) ?: 15.0,
+                    temperatureCelsius = hourly.temperature2m.orEmpty()[i],
+                    feelsLikeCelsius = hourly.apparentTemperature.orEmpty()[i],
                     weatherCode = code,
-                    precipitationChance = hourly?.precipitationProbability?.getOrNull(i) ?: 0,
-                    windSpeedMph = hourly?.windSpeed10m?.getOrNull(i) ?: 5.0,
-                    windDirectionDegrees = hourly?.windDirection10m?.getOrNull(i) ?: 180,
-                    humidityPercent = hourly?.relativeHumidity2m?.getOrNull(i) ?: 65,
-                    uvIndex = (hourly?.uvIndex?.getOrNull(i) ?: 0.0).toInt(),
-                    pressureHpa = hourly?.surfacePressure?.getOrNull(i) ?: 1013.25,
+                    precipitationChance = hourly.precipitationProbability.orEmpty()[i],
+                    windSpeedMph = hourly.windSpeed10m.orEmpty()[i],
+                    windDirectionDegrees = hourly.windDirection10m.orEmpty()[i],
+                    humidityPercent = hourly.relativeHumidity2m.orEmpty()[i],
+                    uvIndex = hourly.uvIndex.orEmpty()[i].roundToInt().coerceAtLeast(0),
+                    pressureHpa = hourly.pressureMsl.orEmpty()[i],
                     isNow = isNowItem
                 )
             )
@@ -1586,27 +1869,29 @@ class WeatherRepository(
 
         // Map daily (7 days)
         val dailyList = mutableListOf<DailyForecastItem>()
-        val dailyCount = daily?.time?.size ?: 0
+        val dailyCount = dailyTimes.size
         for (i in 0 until Math.min(dailyCount, 7)) {
-            val dateStr = daily?.time?.getOrNull(i) ?: ""
-            val dayInfo = TimezoneUtils.formatDayOfWeek(dateStr, location)
-            val dayCode = MetOfficeWeatherCode.fromWmoCode(daily?.weatherCode?.getOrNull(i) ?: 0, isNight = false)
-            val nightCode = MetOfficeWeatherCode.fromWmoCode(daily?.weatherCode?.getOrNull(i) ?: 0, isNight = true)
+            val dateStr = dailyTimes[i]
+            val dayInfo = TimezoneUtils.formatDayOfWeek(dateStr, reportLocation)
+            val dailyWeatherCode = daily.weatherCode.orEmpty()[i]
+            requireSupportedWmoCode(dailyWeatherCode)
+            val dayCode = MetOfficeWeatherCode.fromWmoCode(dailyWeatherCode, isNight = false)
+            val nightCode = MetOfficeWeatherCode.fromWmoCode(dailyWeatherCode, isNight = true)
 
             dailyList.add(
                 DailyForecastItem(
                     date = dateStr,
                     dayOfWeek = dayInfo.first,
                     dateFormatted = dayInfo.second,
-                    maxTempCelsius = daily?.temperature2mMax?.getOrNull(i) ?: 18.0,
-                    minTempCelsius = daily?.temperature2mMin?.getOrNull(i) ?: 10.0,
+                    maxTempCelsius = daily.temperature2mMax.orEmpty()[i],
+                    minTempCelsius = daily.temperature2mMin.orEmpty()[i],
                     dayWeatherCode = dayCode,
                     nightWeatherCode = nightCode,
-                    precipitationChance = daily?.precipitationProbabilityMax?.getOrNull(i) ?: 0,
-                    uvIndex = (daily?.uvIndexMax?.getOrNull(i) ?: 3.0).toInt(),
-                    maxWindGustMph = daily?.windGusts10mMax?.getOrNull(i) ?: 8.0,
-                    sunrise = daily?.sunrise?.getOrNull(i)?.takeLast(5),
-                    sunset = daily?.sunset?.getOrNull(i)?.takeLast(5)
+                    precipitationChance = daily.precipitationProbabilityMax.orEmpty()[i],
+                    uvIndex = daily.uvIndexMax.orEmpty()[i].roundToInt().coerceAtLeast(0),
+                    maxWindGustMph = daily.windGusts10mMax.orEmpty()[i],
+                    sunrise = daily.sunrise.orEmpty()[i].takeLast(5),
+                    sunset = daily.sunset.orEmpty()[i].takeLast(5)
                 )
             )
         }
@@ -1629,7 +1914,7 @@ class WeatherRepository(
         }
 
         return WeatherReport(
-            location = location,
+            location = reportLocation,
             current = currentData,
             hourly = hourlyList,
             daily = synchronizedDailyList,
@@ -1637,6 +1922,18 @@ class WeatherRepository(
             // Open-Meteo does not provide a model issue timestamp in this response.
             modelRunTime = null
         )
+    }
+
+    private fun requireOpenMeteoSeriesSize(name: String, actualSize: Int?, expectedSize: Int) {
+        require(actualSize == expectedSize) {
+            "Open-Meteo returned incomplete $name data ($actualSize of $expectedSize values)"
+        }
+    }
+
+    private fun requireSupportedWmoCode(code: Int) {
+        require(code in setOf(0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99)) {
+            "Open-Meteo returned an unsupported WMO weather code: $code"
+        }
     }
 
     private fun parseIsoToMillis(isoString: String?): Long? {

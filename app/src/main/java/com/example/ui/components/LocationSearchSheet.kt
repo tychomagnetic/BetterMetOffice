@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -455,7 +456,9 @@ private fun fetchGpsLocation(
         }
     } catch (_: Exception) {
     }
-    // Default fallback to London if location provider has no fix
-    onGpsSelect(51.5074, -0.1278, "London (GPS Default)")
+    Toast.makeText(
+        context,
+        "Current location is unavailable. Check location access and try again.",
+        Toast.LENGTH_LONG
+    ).show()
 }
-

@@ -76,7 +76,7 @@ class HourlyForecastWidget : GlanceAppWidget() {
 
             val appPrefs = PreferencesManager(context)
             val tempUnit = appPrefs.getTemperatureUnit()
-            val resolvedLocation = WidgetLocationHelper.getWidgetLocation(context, appPrefs)
+            val resolvedLocation = WidgetLocationHelper.getWidgetDisplayLocation(context, appPrefs)
             val targetLocation = resolvedLocation ?: unavailableGpsLocation(context)
             val cachedReport = resolvedLocation?.let { location ->
                 appPrefs.getCachedWidgetWeatherReport()?.takeIf { report ->
@@ -457,6 +457,7 @@ class RefreshWeatherActionCallback : ActionCallback {
                 val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->
                     prefs.setCachedWidgetWeatherReport(report)
+                    WidgetLocationHelper.commitSuccessfulGpsLocation(prefs, location)
                     prefs.setWidgetPageOffset(0)
                 }
             } catch (_: Exception) {

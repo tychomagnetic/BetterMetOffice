@@ -21,12 +21,14 @@ data class OpenMeteoCurrent(
     @Json(name = "relative_humidity_2m") val relativeHumidity2m: Int? = null,
     @Json(name = "apparent_temperature") val apparentTemperature: Double? = null,
     @Json(name = "precipitation") val precipitation: Double? = null,
+    @Json(name = "precipitation_probability") val precipitationProbability: Int? = null,
     @Json(name = "weather_code") val weatherCode: Int? = null,
-    @Json(name = "surface_pressure") val surfacePressure: Double? = null,
+    @Json(name = "pressure_msl") val pressureMsl: Double? = null,
     @Json(name = "wind_speed_10m") val windSpeed10m: Double? = null,
     @Json(name = "wind_direction_10m") val windDirection10m: Int? = null,
     @Json(name = "wind_gusts_10m") val windGusts10m: Double? = null,
     @Json(name = "visibility") val visibility: Double? = null,
+    @Json(name = "uv_index") val uvIndex: Double? = null,
     @Json(name = "is_day") val isDay: Int? = null
 )
 
@@ -38,7 +40,7 @@ data class OpenMeteoHourly(
     @Json(name = "apparent_temperature") val apparentTemperature: List<Double>? = null,
     @Json(name = "precipitation_probability") val precipitationProbability: List<Int>? = null,
     @Json(name = "weather_code") val weatherCode: List<Int>? = null,
-    @Json(name = "surface_pressure") val surfacePressure: List<Double>? = null,
+    @Json(name = "pressure_msl") val pressureMsl: List<Double>? = null,
     @Json(name = "visibility") val visibility: List<Double>? = null,
     @Json(name = "wind_speed_10m") val windSpeed10m: List<Double>? = null,
     @Json(name = "wind_direction_10m") val windDirection10m: List<Int>? = null,

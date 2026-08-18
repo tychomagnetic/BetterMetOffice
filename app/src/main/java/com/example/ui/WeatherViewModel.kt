@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.TimeZone
 
 data class WeatherUiState(
     val weatherReport: WeatherReport? = null,
@@ -183,7 +184,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
             val result = repository.getWeatherReport(updatedLocation)
             result.onSuccess { report ->
-                showFallbackToastIfNeeded(requestedSource, report.dataSource)
+                showFallbackToastIfNeeded(requestedSource, report)
                 applyWeatherReport(report, updatedLocation)
             }.onFailure { error ->
                 _uiState.update {
@@ -199,12 +200,37 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     private fun showFallbackToastIfNeeded(
         requestedSource: ForecastSource,
-        actualSource: WeatherDataSource
+        report: WeatherReport
     ) {
-        if (requestedSource != ForecastSource.MET_OFFICE_BPF || actualSource == WeatherDataSource.MET_OFFICE_BPF) {
+        if (
+            requestedSource == ForecastSource.MET_OFFICE_BPF &&
+            report.dataSource == WeatherDataSource.MET_OFFICE_BPF &&
+            report.partialFallbackSource == WeatherDataSource.MET_OFFICE_DATAHUB
+        ) {
+            Toast.makeText(
+                getApplication<Application>().applicationContext,
+                "BPF forecast partially unavailable. Missing data filled from Met Office Spot.",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
 
+        val actualSource = report.dataSource
+        val requestedSourceWasUsed = when (requestedSource) {
+            ForecastSource.MET_OFFICE_BPF -> actualSource == WeatherDataSource.MET_OFFICE_BPF
+            ForecastSource.MET_OFFICE_SPOT -> actualSource == WeatherDataSource.MET_OFFICE_DATAHUB ||
+                    actualSource == WeatherDataSource.MET_OFFICE_DATAPOINT
+            ForecastSource.OPEN_METEO -> actualSource == WeatherDataSource.OPEN_METEO_METEOROLOGICAL
+        }
+        if (requestedSourceWasUsed) {
+            return
+        }
+
+        val requestedName = when (requestedSource) {
+            ForecastSource.MET_OFFICE_BPF -> "BPF forecast"
+            ForecastSource.MET_OFFICE_SPOT -> "Met Office Spot forecast"
+            ForecastSource.OPEN_METEO -> "Open-Meteo forecast"
+        }
         val fallbackName = when (actualSource) {
             WeatherDataSource.MET_OFFICE_DATAHUB,
             WeatherDataSource.MET_OFFICE_DATAPOINT -> "Met Office Spot"
@@ -213,7 +239,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
         Toast.makeText(
             getApplication<Application>().applicationContext,
-            "BPF forecast unavailable. Falling back to $fallbackName.",
+            "$requestedName unavailable. Falling back to $fallbackName.",
             Toast.LENGTH_LONG
         ).show()
     }
@@ -290,9 +316,12 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             id = "gps_current",
             name = detectedName ?: "Current Location",
             region = "GPS",
-            country = "United Kingdom",
+            country = null,
             latitude = latitude,
             longitude = longitude,
+            // A GPS fix represents the device's present location, so its configured
+            // timezone is more authoritative than a longitude-only approximation.
+            timezone = TimeZone.getDefault().id,
             isCurrentLocation = true
         )
         selectLocation(location)

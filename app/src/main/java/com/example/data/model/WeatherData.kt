@@ -54,10 +54,11 @@ enum class MetOfficeWeatherCode(val code: Int, val description: String, val isDa
                 66, 67 -> SLEET
                 71, 73 -> LIGHT_SNOW
                 75 -> HEAVY_SNOW
-                77 -> HAIL
+                77 -> LIGHT_SNOW
                 80, 81 -> if (isNight) LIGHT_RAIN_SHOWER_NIGHT else LIGHT_RAIN_SHOWER_DAY
                 82 -> if (isNight) HEAVY_RAIN_SHOWER_NIGHT else HEAVY_RAIN_SHOWER_DAY
-                85, 86 -> if (isNight) LIGHT_SNOW_SHOWER_NIGHT else LIGHT_SNOW_SHOWER_DAY
+                85 -> if (isNight) LIGHT_SNOW_SHOWER_NIGHT else LIGHT_SNOW_SHOWER_DAY
+                86 -> if (isNight) HEAVY_SNOW_SHOWER_NIGHT else HEAVY_SNOW_SHOWER_DAY
                 95 -> if (isNight) THUNDER_SHOWER_NIGHT else THUNDER_SHOWER_DAY
                 96, 99 -> THUNDER
                 else -> if (isNight) PARTLY_CLOUDY_NIGHT else SUNNY_INTERVALS
@@ -186,7 +187,8 @@ data class WeatherReport(
     val daily: List<DailyForecastItem>,
     val dataSource: WeatherDataSource,
     val modelRunTime: String? = null,
-    val fetchedAtMillis: Long = System.currentTimeMillis()
+    val fetchedAtMillis: Long = System.currentTimeMillis(),
+    val partialFallbackSource: WeatherDataSource? = null
 )
 
 enum class WeatherDataSource(val displayName: String, val isOfficialMetOffice: Boolean) {

@@ -8,6 +8,27 @@ import org.junit.Test
 class BpfIntervalUtilsTest {
 
     @Test
+    fun `incomplete terminal BPF slots are trimmed without hiding internal gaps`() {
+        val timestamps = listOf(
+            "2026-08-25T15:00:00Z",
+            "2026-08-25T16:00:00Z",
+            "2026-08-25T17:00:00Z",
+            "2026-08-25T18:00:00Z"
+        )
+        val completeTimestamps = setOf(
+            "2026-08-25T15:00:00Z",
+            "2026-08-25T17:00:00Z"
+        )
+
+        val trimmed = BpfIntervalUtils.trimIncompleteTail(timestamps) {
+            it in completeTimestamps
+        }
+
+        assertEquals(timestamps.take(3), trimmed)
+        assertFalse(trimmed[1] in completeTimestamps)
+    }
+
+    @Test
     fun `three-hour source timeline expands to hourly display timestamps`() {
         val expanded = BpfIntervalUtils.expandHourlyTimeline(
             listOf(

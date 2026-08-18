@@ -11,8 +11,8 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.data.local.PreferencesManager
 import com.example.data.model.LocationItem
-import com.example.data.util.TimezoneUtils
 import java.util.Locale
+import java.util.TimeZone
 
 object WidgetLocationHelper {
 
@@ -29,16 +29,50 @@ object WidgetLocationHelper {
             return prefs.getWidgetFixedLocation()
         }
 
-        // GPS / Imprecise location mode (Default)
+        if (!hasLocationPermission(context)) {
+            Log.d(TAG, "Location permissions not granted for widget GPS refresh")
+            return null
+        }
+
+        // Prefer a newly available fix for the next forecast fetch. If Android's
+        // while-in-use restriction prevents that background lookup, retain the
+        // last GPS location whose widget forecast completed successfully.
         val gpsLoc = getImpreciseLocation(context)
         if (gpsLoc != null) {
             Log.d(TAG, "Using imprecise GPS location for widget: ${gpsLoc.name} (${gpsLoc.latitude}, ${gpsLoc.longitude})")
             return gpsLoc
         }
 
-        Log.d(TAG, "Imprecise GPS location unavailable; refusing to substitute another location")
+        val cachedGpsLocation = getLastSuccessfulGpsLocation(prefs)
+        if (cachedGpsLocation != null) {
+            Log.d(TAG, "Live GPS unavailable; refreshing the last successful widget GPS location")
+            return cachedGpsLocation
+        }
+
+        Log.d(TAG, "Imprecise GPS location unavailable and no successful GPS widget location is cached")
         return null
     }
+
+    /**
+     * Returns the stable location associated with the currently displayed GPS
+     * forecast. A fresh coordinate is not exposed here until its fetch succeeds,
+     * preventing a widget redraw from pairing a new place with old weather.
+     */
+    fun getWidgetDisplayLocation(context: Context, prefs: PreferencesManager): LocationItem? {
+        if (!prefs.isWidgetGpsEnabled()) return prefs.getWidgetFixedLocation()
+        if (!hasLocationPermission(context)) return null
+        return getLastSuccessfulGpsLocation(prefs) ?: getImpreciseLocation(context)
+    }
+
+    fun commitSuccessfulGpsLocation(prefs: PreferencesManager, location: LocationItem) {
+        if (prefs.isWidgetGpsEnabled() && location.isCurrentLocation) {
+            prefs.setCachedWidgetGpsLocation(location)
+        }
+    }
+
+    private fun getLastSuccessfulGpsLocation(prefs: PreferencesManager): LocationItem? =
+        prefs.getCachedWidgetGpsLocation()
+            ?: prefs.getCachedWidgetWeatherReport()?.location?.takeIf { it.isCurrentLocation }
 
     fun hasLocationPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(
@@ -94,11 +128,7 @@ object WidgetLocationHelper {
                     country = null,
                     latitude = bestLocation.latitude,
                     longitude = bestLocation.longitude,
-                    timezone = TimezoneUtils.findApproximateTimeZone(
-                        bestLocation.latitude,
-                        bestLocation.longitude,
-                        country = null
-                    ).id,
+                    timezone = TimeZone.getDefault().id,
                     isCurrentLocation = true
                 )
             }

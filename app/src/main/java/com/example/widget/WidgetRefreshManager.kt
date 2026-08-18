@@ -68,6 +68,7 @@ object WidgetRefreshManager {
                 val result = repository.getSpotWidgetReport(location)
                 result.onSuccess { report ->
                     prefs.setCachedWidgetWeatherReport(report)
+                    WidgetLocationHelper.commitSuccessfulGpsLocation(prefs, location)
                     prefs.setWidgetPageOffset(0)
                     Log.d(TAG, "Widget background refresh succeeded for ${location.name}")
                 }.onFailure { error ->

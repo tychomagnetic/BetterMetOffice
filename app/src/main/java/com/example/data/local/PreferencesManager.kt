@@ -295,6 +295,25 @@ class PreferencesManager(context: Context) {
         }
     }
 
+    fun getCachedWidgetGpsLocation(): LocationItem? {
+        val json = prefs.getString(KEY_CACHED_WIDGET_GPS_LOCATION, null) ?: return null
+        return try {
+            locationAdapter.fromJson(json)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun setCachedWidgetGpsLocation(location: LocationItem) {
+        if (!location.isCurrentLocation) return
+        try {
+            prefs.edit()
+                .putString(KEY_CACHED_WIDGET_GPS_LOCATION, locationAdapter.toJson(location))
+                .apply()
+        } catch (_: Exception) {
+        }
+    }
+
     fun getWidgetPageOffset(): Int {
         return prefs.getInt(KEY_WIDGET_PAGE_OFFSET, 0)
     }
@@ -366,7 +385,9 @@ class PreferencesManager(context: Context) {
         private const val KEY_FORECAST_SOURCE = "forecast_source"
         private const val KEY_CACHED_WEATHER_REPORT = "cached_weather_report"
         private const val KEY_CACHED_WIDGET_WEATHER_REPORT = "cached_widget_weather_report"
-        private const val KEY_CACHED_BPF_LOCATION_PREFIX = "cached_bpf_location_v3_"
+        private const val KEY_CACHED_WIDGET_GPS_LOCATION = "cached_widget_gps_location"
+        // v4 invalidates reports written before BPF probability completeness was enforced.
+        private const val KEY_CACHED_BPF_LOCATION_PREFIX = "cached_bpf_location_v4_"
         private const val KEY_WIDGET_PAGE_OFFSET = "widget_page_offset"
         private const val KEY_WIDGET_REFRESH_INTERVAL = "widget_refresh_interval"
         private const val KEY_WIDGET_USE_GPS = "widget_use_gps"

@@ -174,6 +174,33 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `widget GPS cache only retains a successfully resolved current location`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("met_office_weather_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        val prefs = PreferencesManager(context)
+        val gpsLocation = LocationItem(
+            id = "widget_gps_current",
+            name = "Current Location",
+            latitude = 52.2,
+            longitude = 1.5,
+            timezone = "Europe/London",
+            isCurrentLocation = true
+        )
+
+        prefs.setCachedWidgetGpsLocation(gpsLocation)
+
+        assertEquals(gpsLocation, prefs.getCachedWidgetGpsLocation())
+
+        prefs.setCachedWidgetGpsLocation(
+            gpsLocation.copy(id = "fixed", name = "Fixed", isCurrentLocation = false)
+        )
+        assertEquals(gpsLocation, prefs.getCachedWidgetGpsLocation())
+    }
+
+    @Test
     fun `widget fixed location does not follow later app selections`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.getSharedPreferences("met_office_weather_prefs", Context.MODE_PRIVATE)

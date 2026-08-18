@@ -8,6 +8,16 @@ import java.util.TimeZone
 /** Helpers for BPF diagnostics whose timestamp marks the end of an interval. */
 object BpfIntervalUtils {
 
+    /**
+     * BPF parameters can end on different validity boundaries. Remove only the
+     * unusable suffix so a single unsupported terminal hour does not discard an
+     * otherwise complete forecast; callers still validate gaps within the result.
+     */
+    fun trimIncompleteTail(
+        timestamps: List<String>,
+        hasCompleteDisplayData: (String) -> Boolean
+    ): List<String> = timestamps.dropLastWhile { !hasCompleteDisplayData(it) }
+
     fun expandHourlyTimeline(timestamps: List<String>): List<String> {
         if (timestamps.size < 2) return timestamps
 
