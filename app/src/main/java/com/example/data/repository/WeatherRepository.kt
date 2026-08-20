@@ -25,6 +25,7 @@ import com.example.data.remote.MetOfficeBpfApiService
 import com.example.data.remote.OpenMeteoApiService
 import com.example.data.util.TimezoneUtils
 import com.example.data.util.BpfIntervalUtils
+import com.example.data.util.RepresentativeWeatherUtils
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -148,14 +149,14 @@ class WeatherRepository(
         if (selectedSource == ForecastSource.MET_OFFICE_BPF && bpfApiKey.isNotBlank()) {
             try {
                 return@withContext Result.success(
-                    fetchBpfWeatherReport(
+                    applyRepresentativeDailyConditions(fetchBpfWeatherReport(
                         location = location,
                         apiKey = bpfApiKey,
                         spotApiKey = apiKey,
                         spotClientSecret = clientSecret,
                         startTime = startTime,
                         timestamp = timestamp
-                    )
+                    ))
                 )
             } catch (_: Exception) {
                 // BPF is deliberately allowed to fall back to the free source if its limited service is unavailable.
@@ -264,7 +265,7 @@ class WeatherRepository(
                         threeHourly = if (threeHourlyResponse != null && threeHourlyResponse.isSuccessful) threeHourlyBody else null,
                         daily = if (dailyResponse != null && dailyResponse.isSuccessful) dailyBody else null
                     )
-                    return@withContext Result.success(report)
+                    return@withContext Result.success(applyRepresentativeDailyConditions(report))
                 }
             } catch (e: Exception) {
                 // Fallback to meteorological model if Met Office fails or times out
@@ -301,7 +302,7 @@ class WeatherRepository(
                 }
 
                 val report = mapOpenMeteoResponse(location, res)
-                return@withContext Result.success(report)
+                return@withContext Result.success(applyRepresentativeDailyConditions(report))
             } else {
                 _debugInfo.update { old ->
                     ApiDebugInfo(
@@ -338,6 +339,15 @@ class WeatherRepository(
             return@withContext Result.failure(e)
         }
     }
+
+    private fun applyRepresentativeDailyConditions(report: WeatherReport): WeatherReport =
+        report.copy(
+            daily = RepresentativeWeatherUtils.applyToDailyForecast(
+                daily = report.daily,
+                hourly = report.hourly,
+                location = report.location
+            )
+        )
 
     /**
      * Widget-only forecast path. The five-card widget needs only the Spot hourly
@@ -728,20 +738,21 @@ class WeatherRepository(
             expandAcrossInterval = true
         )
         val ultravioletIndex = bpfSeries(percentileCollection, "ultravioletIndex")
-        // Probability values use the CoverageJSON validity time (`t`). A PT01H
-        // value with bounds 15:00-16:00 is therefore displayed at 16:00, not
-        // moved back to 15:00. This also makes its label comparable with Spot,
-        // whose PoP is centred on its validity time.
-        val hourlyPrecipitationProbability = bpfSeries(
+        // Accumulated precipitation probabilities describe the bounded period
+        // ending at `t`. Hour cards are labelled by the beginning of their
+        // period, so align these values to the lower CoverageJSON bound just as
+        // we do for the period weather codes. Keeping the calculation in UTC
+        // also lets the later local-time conversion handle GMT/BST transitions.
+        val hourlyPrecipitationProbability = bpfIntervalSeries(
             probabilityCollection,
-            "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h"
+            parameter = "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt01h",
+            intervalHours = 1
         )
-        val threeHourlyPrecipitationProbability = BpfIntervalUtils.expandFromValidityTime(
-            series = bpfSeries(
-                probabilityCollection,
-                "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h"
-            ),
-            intervalHours = 3
+        val threeHourlyPrecipitationProbability = bpfIntervalSeries(
+            probabilityCollection,
+            parameter = "probabilityOfLweThicknessOfPrecipitationAmountAboveThresholdSumPt03h",
+            intervalHours = 3,
+            expandAcrossInterval = true
         )
         require(hourlyPrecipitationProbability.isNotEmpty()) {
             "BPF probability payload contains no one-hour precipitation probabilities"

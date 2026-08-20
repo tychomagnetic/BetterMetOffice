@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -42,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.LocationItem
 import com.example.data.util.TimezoneUtils
 import com.example.ui.components.ApiDebugSheet
@@ -72,6 +75,20 @@ fun WeatherScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val report = uiState.weatherReport
+
+    if (uiState.isMapImagesOpen) {
+        val mapImagesViewModel: MapImagesViewModel = viewModel()
+        MapImagesScreen(
+            viewModel = mapImagesViewModel,
+            onBack = { viewModel.closeMapImages() },
+            onConfigureKey = {
+                viewModel.closeMapImages()
+                viewModel.openSettings()
+            },
+            modifier = modifier
+        )
+        return
+    }
 
     if (uiState.isSettingsOpen) {
         SettingsScreen(
@@ -221,6 +238,30 @@ fun WeatherScreen(
                                 viewModel.openDayDetailSheet(day, index)
                             }
                         )
+
+                        Surface(
+                            onClick = { viewModel.openMapImages() },
+                            shape = RoundedCornerShape(16.dp),
+                            color = BentoHero,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BentoBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .testTag("open_weather_maps_button")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp)
+                            ) {
+                                Icon(Icons.Default.Map, null, tint = BentoPurplePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Weather maps", color = BentoTextPrimary, fontWeight = FontWeight.Bold)
+                                    Text("Precipitation, cloud, temperature and pressure", color = BentoTextSecondary, fontSize = 11.sp)
+                                }
+                                Icon(Icons.Default.ChevronRight, "Open weather maps", tint = BentoTextSecondary)
+                            }
+                        }
 
                         // Detailed Meteorological Metrics Grid
                         val todayDaily = report.daily.firstOrNull()

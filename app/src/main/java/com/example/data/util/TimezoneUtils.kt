@@ -233,7 +233,11 @@ object TimezoneUtils {
     /**
      * Formats date string and day-of-week relative to target [location]'s local calendar.
      */
-    fun formatDayOfWeek(dateStr: String, location: LocationItem): Pair<String, String> {
+    fun formatDayOfWeek(
+        dateStr: String,
+        location: LocationItem,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Pair<String, String> {
         return try {
             val tz = getTimeZoneForLocation(location)
             val sdfInput = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
@@ -254,7 +258,7 @@ object TimezoneUtils {
             }
 
             val calToday = Calendar.getInstance(tz).apply {
-                timeInMillis = System.currentTimeMillis()
+                timeInMillis = nowMillis
                 set(Calendar.HOUR_OF_DAY, 0)
                 set(Calendar.MINUTE, 0)
                 set(Calendar.SECOND, 0)

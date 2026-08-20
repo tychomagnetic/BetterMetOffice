@@ -344,13 +344,20 @@ class WeatherRepositoryFallbackTest {
             """.trimIndent()
         }
 
-        private fun probabilityCoverage(parameter: String): String = """
-            {
-              "type":"Coverage",
-              "domain":{"axes":{"t":{"values":["$time"]},"${parameter}Values":{"values":[">0.0"]}}},
-              "ranges":{"$parameter":{"axisNames":["${parameter}Values","t"],"shape":[1,1],"values":[0.8]}}
+        private fun probabilityCoverage(parameter: String): String {
+            val intervalEnd = if (parameter.endsWith("Pt03h")) {
+                "2026-08-17T15:00:00Z"
+            } else {
+                "2026-08-17T13:00:00Z"
             }
-        """.trimIndent()
+            return """
+                {
+                  "type":"Coverage",
+                  "domain":{"axes":{"t":{"values":["$intervalEnd"],"bounds":["$time","$intervalEnd"]},"${parameter}Values":{"values":[">0.0"]}}},
+                  "ranges":{"$parameter":{"axisNames":["${parameter}Values","t"],"shape":[1,1],"values":[0.8]}}
+                }
+            """.trimIndent()
+        }
     }
 
     private class SuccessfulSpotApi(

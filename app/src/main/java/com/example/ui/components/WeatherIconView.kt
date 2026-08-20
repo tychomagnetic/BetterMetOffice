@@ -165,7 +165,40 @@ fun WeatherIconView(
                 drawRaindrop(cx = w * 0.40f, topY = h * 0.68f, length = h * 0.22f, color = rainColor, strokeWidth = w * 0.075f)
                 drawRaindrop(cx = w * 0.64f, topY = h * 0.68f, length = h * 0.22f, color = rainColor, strokeWidth = w * 0.075f)
             }
-            WeatherIconType.HEAVY_RAIN, WeatherIconType.HEAVY_RAIN_DAY, WeatherIconType.HEAVY_RAIN_NIGHT -> {
+            WeatherIconType.HEAVY_RAIN_SHOWER_DAY -> {
+                // Heavy showers retain the sun cue that distinguishes them
+                // from persistent heavy rain.
+                drawSunPartial(w, h, tint ?: SolarGold)
+                drawCloud(
+                    cx = w * 0.52f,
+                    cy = h * 0.38f,
+                    width = w * 0.78f,
+                    height = h * 0.42f,
+                    color = tint ?: Color(0xFF546E7A)
+                )
+                val rainColor = tint ?: Color(0xFF0288D1)
+                drawRaindrop(cx = w * 0.27f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.43f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.59f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.75f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+            }
+            WeatherIconType.HEAVY_RAIN_SHOWER_NIGHT -> {
+                // The corresponding moon cue preserves the night shower type.
+                drawMoonPartial(w, h, tint ?: Color(0xFFF59E0B))
+                drawCloud(
+                    cx = w * 0.52f,
+                    cy = h * 0.38f,
+                    width = w * 0.78f,
+                    height = h * 0.42f,
+                    color = tint ?: Color(0xFF455A64)
+                )
+                val rainColor = tint ?: Color(0xFF0288D1)
+                drawRaindrop(cx = w * 0.27f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.43f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.59f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+                drawRaindrop(cx = w * 0.75f, topY = h * 0.65f, length = h * 0.25f, color = rainColor, strokeWidth = w * 0.08f)
+            }
+            WeatherIconType.HEAVY_RAIN -> {
                 // Darker cloud with 4 dense, slanted raindrops showing heavy precipitation
                 drawCloud(
                     cx = w * 0.50f,

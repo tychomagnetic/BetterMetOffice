@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -130,9 +131,11 @@ fun SettingsScreen(
 
     var apiKeyInput by remember(uiState.apiKey) { mutableStateOf(uiState.apiKey) }
     var bpfApiKeyInput by remember(uiState.bpfApiKey) { mutableStateOf(uiState.bpfApiKey) }
+    var mapImagesApiKeyInput by remember(uiState.mapImagesApiKey) { mutableStateOf(uiState.mapImagesApiKey) }
     var clientSecretInput by remember(uiState.clientSecret) { mutableStateOf(uiState.clientSecret) }
     var isApiKeyVisible by remember { mutableStateOf(false) }
     var isBpfApiKeyVisible by remember { mutableStateOf(false) }
+    var isMapImagesApiKeyVisible by remember { mutableStateOf(false) }
     var isSecretVisible by remember { mutableStateOf(false) }
     var isHelpExpanded by remember { mutableStateOf(false) }
     var widgetLocationPermissionGranted by remember {
@@ -866,6 +869,104 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "Testing spends one request. Widget and background widget refreshes never call BPF; the widget always uses its separate Spot-data cache.",
+                    style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 11.sp)
+                )
+            }
+
+            SettingsCard(
+                title = "Weather Map Images Key",
+                icon = Icons.Default.Map,
+                subtitle = "Required only for the separate seven-day weather maps page"
+            ) {
+                val configured = uiState.mapImagesApiKey.isNotBlank()
+                Text(
+                    text = if (configured) "Map Images key configured" else "No Map Images key saved",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = if (configured) Color(0xFF2E7D32) else Color(0xFFE65100),
+                        fontWeight = FontWeight.Medium
+                    )
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = mapImagesApiKeyInput,
+                    onValueChange = { mapImagesApiKeyInput = it },
+                    label = { Text("Map Images API Key") },
+                    placeholder = { Text("Paste the key for your Map Images order") },
+                    singleLine = true,
+                    visualTransformation = if (isMapImagesApiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (mapImagesApiKeyInput.isNotBlank()) {
+                                IconButton(onClick = { mapImagesApiKeyInput = "" }) {
+                                    Icon(Icons.Default.Clear, "Clear map key", tint = BentoTextSecondary)
+                                }
+                            }
+                            IconButton(onClick = { isMapImagesApiKeyVisible = !isMapImagesApiKeyVisible }) {
+                                Icon(
+                                    if (isMapImagesApiKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    if (isMapImagesApiKeyVisible) "Hide map key" else "Show map key",
+                                    tint = BentoTextSecondary
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BentoPurplePrimary,
+                        unfocusedBorderColor = BentoBorder,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = BentoHero
+                    ),
+                    modifier = Modifier.fillMaxWidth().testTag("map_images_api_key_text_field")
+                )
+                uiState.mapImagesApiKeyTestStatus?.let { status ->
+                    Spacer(Modifier.height(10.dp))
+                    val success = status is ApiKeyTestResult.Success
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (success) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = when (status) {
+                                is ApiKeyTestResult.Success -> status.message
+                                is ApiKeyTestResult.Error -> status.message
+                            },
+                            color = if (success) Color(0xFF1B5E20) else Color(0xFFB71C1C),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { viewModel.testMapImagesApiKey(mapImagesApiKeyInput) },
+                        enabled = mapImagesApiKeyInput.isNotBlank() && !uiState.isTestingMapImagesApiKey,
+                        modifier = Modifier.weight(1f).testTag("test_map_images_api_key_button")
+                    ) {
+                        if (uiState.isTestingMapImagesApiKey) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else Text("Test")
+                    }
+                    Button(
+                        onClick = {
+                            viewModel.saveMapImagesApiKey(mapImagesApiKeyInput)
+                            Toast.makeText(context, "Map Images API key saved", Toast.LENGTH_SHORT).show()
+                        },
+                        enabled = mapImagesApiKeyInput.isNotBlank(),
+                        modifier = Modifier.weight(1.3f).testTag("save_map_images_api_key_button")
+                    ) { Text("Save") }
+                    if (configured || mapImagesApiKeyInput.isNotBlank()) {
+                        IconButton(onClick = {
+                            mapImagesApiKeyInput = ""
+                            viewModel.clearMapImagesApiKey()
+                        }) { Icon(Icons.Default.Delete, "Clear Map Images key", tint = Color(0xFFC62828)) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "The app discovers your PNG order automatically. It checks metadata after the 00:00 and 12:00 UTC run boundaries and caches downloaded frames.",
                     style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 11.sp)
                 )
             }

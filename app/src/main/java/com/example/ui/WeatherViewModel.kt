@@ -16,7 +16,9 @@ import com.example.data.model.WeatherDataSource
 import com.example.data.model.WeatherReport
 import com.example.data.model.WidgetRefreshInterval
 import com.example.data.model.WindSpeedUnit
+import com.example.data.util.WeatherClockUtils
 import com.example.data.repository.ApiKeyTestResult
+import com.example.data.repository.MapImagesRepository
 import com.example.data.repository.WeatherRepository
 import com.example.widget.HourlyForecastWidget
 import com.example.widget.WidgetRefreshManager
@@ -44,6 +46,7 @@ data class WeatherUiState(
     val searchQuery: String = "",
     val apiKey: String = "",
     val bpfApiKey: String = "",
+    val mapImagesApiKey: String = "",
     val clientSecret: String = "",
     val useMetOfficeSource: Boolean = true,
     val forecastSource: ForecastSource = ForecastSource.MET_OFFICE_SPOT,
@@ -55,6 +58,7 @@ data class WeatherUiState(
     val widgetFixedLocation: LocationItem = LocationItem.DEFAULT_LOCATIONS.first(),
     val isWidgetLocationPickerOpen: Boolean = false,
     val isSettingsOpen: Boolean = false,
+    val isMapImagesOpen: Boolean = false,
     val isApiKeyDialogOpen: Boolean = false,
     val isLocationSheetOpen: Boolean = false,
     val isUnitsDialogOpen: Boolean = false,
@@ -62,6 +66,8 @@ data class WeatherUiState(
     val isTestingApiKey: Boolean = false,
     val bpfApiKeyTestStatus: ApiKeyTestResult? = null,
     val isTestingBpfApiKey: Boolean = false,
+    val mapImagesApiKeyTestStatus: ApiKeyTestResult? = null,
+    val isTestingMapImagesApiKey: Boolean = false,
     val selectedDayIndex: Int = 0,
     val selectedDayForDetail: DailyForecastItem? = null,
     val isDayDetailSheetOpen: Boolean = false,
@@ -74,14 +80,18 @@ data class WeatherUiState(
     val rawGeocodingQueryInput: String = "",
     val rawGeocodingResultJson: String? = null,
     val rawGeocodingLocations: List<LocationItem> = emptyList(),
-    val isTestingGeocoding: Boolean = false
+    val isTestingGeocoding: Boolean = false,
+    val clockTickMillis: Long = System.currentTimeMillis()
 )
 
 class WeatherViewModel(application: Application) : AndroidViewModel(application) {
 
     private val preferencesManager = PreferencesManager(application.applicationContext)
     private val repository = WeatherRepository(preferencesManager)
+    private val mapImagesRepository = MapImagesRepository(application.applicationContext, preferencesManager)
     private val bpfCacheMaxAgeMillis = 2L * 60L * 60L * 1000L
+    private val automaticRefreshMaxAgeMillis = 2L * 60L * 60L * 1000L
+    private val automaticRefreshRetryMillis = 15L * 60L * 1000L
 
     private val _uiState = MutableStateFlow(WeatherUiState())
     val uiState: StateFlow<WeatherUiState> = _uiState.asStateFlow()
@@ -89,6 +99,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     private var searchJob: Job? = null
     private var geocodeTestJob: Job? = null
     private var weatherLoadJob: Job? = null
+    private var lastAutomaticRefreshAttemptMillis: Long = 0L
 
     init {
         val initialLocation = preferencesManager.getSelectedLocation()
@@ -97,6 +108,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val initialSelectedLocation = initialLocation.copy(isFavorite = isFav)
         val initialKey = preferencesManager.getApiKey()
         val initialBpfKey = preferencesManager.getBpfApiKey()
+        val initialMapImagesKey = preferencesManager.getMapImagesApiKey()
         val initialSecret = preferencesManager.getClientSecret()
         val initialForecastSource = preferencesManager.getForecastSource()
         val initialTempUnit = preferencesManager.getTemperatureUnit()
@@ -120,6 +132,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 favoriteLocations = initialFavorites,
                 apiKey = initialKey,
                 bpfApiKey = initialBpfKey,
+                mapImagesApiKey = initialMapImagesKey,
                 clientSecret = initialSecret,
                 useMetOfficeSource = initialForecastSource != ForecastSource.OPEN_METEO,
                 forecastSource = initialForecastSource,
@@ -151,6 +164,30 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             it.id == location.id ||
             (it.name.equals(location.name, ignoreCase = true) && Math.abs(it.latitude - location.latitude) < 0.05 && Math.abs(it.longitude - location.longitude) < 0.05) ||
             (Math.abs(it.latitude - location.latitude) < 0.01 && Math.abs(it.longitude - location.longitude) < 0.01)
+        }
+    }
+
+    fun onVisibleTimeCheck(nowMillis: Long = System.currentTimeMillis()) {
+        val currentState = _uiState.value
+        val currentReport = currentState.weatherReport
+        if (currentReport != null) {
+            val update = WeatherClockUtils.advance(currentReport, currentState.selectedDayIndex, nowMillis)
+            _uiState.update {
+                it.copy(
+                    weatherReport = update.report,
+                    selectedDayIndex = update.selectedDayIndex,
+                    clockTickMillis = nowMillis
+                )
+            }
+
+            val stale = nowMillis - currentReport.fetchedAtMillis >= automaticRefreshMaxAgeMillis
+            val retryAllowed = nowMillis - lastAutomaticRefreshAttemptMillis >= automaticRefreshRetryMillis
+            if (stale && retryAllowed && weatherLoadJob?.isActive != true) {
+                lastAutomaticRefreshAttemptMillis = nowMillis
+                loadWeather(currentState.selectedLocation, isRefresh = true, useFreshBpfCache = false)
+            }
+        } else {
+            _uiState.update { it.copy(clockTickMillis = nowMillis) }
         }
     }
 
@@ -372,6 +409,37 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         if (_uiState.value.forecastSource == ForecastSource.MET_OFFICE_BPF) {
             loadWeather(_uiState.value.selectedLocation, isRefresh = true)
         }
+    }
+
+    fun saveMapImagesApiKey(apiKey: String) {
+        val trimmed = apiKey.trim()
+        if (trimmed != _uiState.value.mapImagesApiKey) {
+            preferencesManager.clearMapManifestCache()
+        }
+        preferencesManager.setMapImagesApiKey(trimmed)
+        _uiState.update { it.copy(mapImagesApiKey = trimmed, mapImagesApiKeyTestStatus = null) }
+    }
+
+    fun testMapImagesApiKey(apiKey: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTestingMapImagesApiKey = true, mapImagesApiKeyTestStatus = null) }
+            val result = mapImagesRepository.testApiKey(apiKey)
+            _uiState.update { it.copy(isTestingMapImagesApiKey = false, mapImagesApiKeyTestStatus = result) }
+        }
+    }
+
+    fun clearMapImagesApiKey() {
+        preferencesManager.setMapImagesApiKey("")
+        preferencesManager.clearMapManifestCache()
+        _uiState.update { it.copy(mapImagesApiKey = "", mapImagesApiKeyTestStatus = null) }
+    }
+
+    fun openMapImages() {
+        _uiState.update { it.copy(isMapImagesOpen = true) }
+    }
+
+    fun closeMapImages() {
+        _uiState.update { it.copy(isMapImagesOpen = false) }
     }
 
     fun openSettings() {

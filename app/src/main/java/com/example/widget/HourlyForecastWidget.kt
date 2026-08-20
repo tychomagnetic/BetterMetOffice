@@ -434,7 +434,9 @@ fun getWidgetWeatherIcon(weatherCode: MetOfficeWeatherCode): Int {
         WeatherIconType.LIGHT_RAIN -> R.drawable.ic_widget_rain
         WeatherIconType.RAIN_SHOWER_DAY -> R.drawable.ic_widget_rain_shower_day
         WeatherIconType.RAIN_SHOWER_NIGHT -> R.drawable.ic_widget_rain_shower_night
-        WeatherIconType.HEAVY_RAIN, WeatherIconType.HEAVY_RAIN_DAY, WeatherIconType.HEAVY_RAIN_NIGHT -> R.drawable.ic_widget_heavy_rain
+        WeatherIconType.HEAVY_RAIN_SHOWER_DAY -> R.drawable.ic_widget_heavy_rain_shower_day
+        WeatherIconType.HEAVY_RAIN_SHOWER_NIGHT -> R.drawable.ic_widget_heavy_rain_shower_night
+        WeatherIconType.HEAVY_RAIN -> R.drawable.ic_widget_heavy_rain
         WeatherIconType.SLEET, WeatherIconType.SLEET_DAY, WeatherIconType.SLEET_NIGHT, WeatherIconType.HAIL -> R.drawable.ic_widget_sleet
         WeatherIconType.SNOW, WeatherIconType.SNOW_DAY, WeatherIconType.SNOW_NIGHT -> R.drawable.ic_widget_snow
         WeatherIconType.HEAVY_SNOW, WeatherIconType.HEAVY_SNOW_DAY, WeatherIconType.HEAVY_SNOW_NIGHT -> R.drawable.ic_widget_heavy_snow

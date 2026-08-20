@@ -3,6 +3,7 @@ package com.example.data.local
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.model.LocationItem
+import com.example.data.model.MapManifestCache
 import com.example.data.model.PressureUnit
 import com.example.data.model.TemperatureUnit
 import com.example.data.model.ForecastSource
@@ -28,6 +29,7 @@ class PreferencesManager(context: Context) {
     )
     private val locationAdapter = moshi.adapter(LocationItem::class.java)
     private val weatherReportAdapter = moshi.adapter(WeatherReport::class.java)
+    private val mapManifestAdapter = moshi.adapter(MapManifestCache::class.java)
 
     private val _apiKeyFlow = MutableStateFlow(getApiKey())
     val apiKeyFlow: StateFlow<String> = _apiKeyFlow.asStateFlow()
@@ -123,6 +125,38 @@ class PreferencesManager(context: Context) {
     fun setBpfApiKey(key: String) {
         prefs.edit().putString(KEY_MET_OFFICE_BPF_API_KEY, key.trim()).apply()
         _bpfApiKeyFlow.value = key.trim()
+    }
+
+    fun getMapImagesApiKey(): String = prefs.getString(KEY_MET_OFFICE_MAP_IMAGES_API_KEY, "") ?: ""
+
+    fun setMapImagesApiKey(key: String) {
+        prefs.edit().putString(KEY_MET_OFFICE_MAP_IMAGES_API_KEY, key.trim()).apply()
+    }
+
+    fun getMapManifestCache(): MapManifestCache? {
+        val json = prefs.getString(KEY_MAP_IMAGES_MANIFEST, null) ?: return null
+        return runCatching { mapManifestAdapter.fromJson(json) }.getOrNull()
+    }
+
+    fun setMapManifestCache(cache: MapManifestCache) {
+        prefs.edit().putString(KEY_MAP_IMAGES_MANIFEST, mapManifestAdapter.toJson(cache)).apply()
+    }
+
+    fun clearMapManifestCache() {
+        prefs.edit().remove(KEY_MAP_IMAGES_MANIFEST).apply()
+    }
+
+    fun getSelectedMapOrderId(): String = prefs.getString(KEY_MAP_IMAGES_ORDER_ID, "") ?: ""
+
+    fun setSelectedMapOrderId(orderId: String) {
+        prefs.edit().putString(KEY_MAP_IMAGES_ORDER_ID, orderId).apply()
+    }
+
+    fun getSelectedMapLayerId(): String =
+        prefs.getString(KEY_MAP_IMAGES_LAYER_ID, "total_precipitation_rate") ?: "total_precipitation_rate"
+
+    fun setSelectedMapLayerId(layerId: String) {
+        prefs.edit().putString(KEY_MAP_IMAGES_LAYER_ID, layerId).apply()
     }
 
     fun getSelectedLocation(): LocationItem {
@@ -376,6 +410,10 @@ class PreferencesManager(context: Context) {
         private const val KEY_MET_OFFICE_API_KEY = "met_office_api_key"
         private const val KEY_MET_OFFICE_SECRET = "met_office_secret"
         private const val KEY_MET_OFFICE_BPF_API_KEY = "met_office_bpf_api_key"
+        private const val KEY_MET_OFFICE_MAP_IMAGES_API_KEY = "met_office_map_images_api_key"
+        private const val KEY_MAP_IMAGES_MANIFEST = "map_images_manifest_v1"
+        private const val KEY_MAP_IMAGES_ORDER_ID = "map_images_order_id"
+        private const val KEY_MAP_IMAGES_LAYER_ID = "map_images_layer_id"
         private const val KEY_SELECTED_LOCATION = "selected_location"
         private const val KEY_FAVORITE_LOCATIONS = "favorite_locations"
         private const val KEY_TEMP_UNIT = "temp_unit"
