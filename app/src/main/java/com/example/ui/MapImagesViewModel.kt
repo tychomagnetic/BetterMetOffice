@@ -9,6 +9,7 @@ import com.example.data.local.PreferencesManager
 import com.example.data.model.MapFrame
 import com.example.data.model.MapOrder
 import com.example.data.repository.MapImagesRepository
+import com.example.data.util.MapImagesUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -58,8 +59,15 @@ class MapImagesViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<MapImagesUiState> = _uiState.asStateFlow()
     private var imageJob: Job? = null
     private var preloadJob: Job? = null
+    private var catalogJob: Job? = null
     private val bitmapCache = mutableMapOf<String, Bitmap>()
     private val mapZone = ZoneId.of("Europe/London")
+
+    fun onScreenEntered() {
+        // The repository compares the manifest's checked boundary with the latest
+        // 00:00/12:00 UTC boundary and only contacts the API when it is stale.
+        loadCatalog()
+    }
 
     fun loadCatalog(forceRefresh: Boolean = false, orderId: String? = null) {
         val key = preferences.getMapImagesApiKey()
@@ -73,7 +81,8 @@ class MapImagesViewModel(application: Application) : AndroidViewModel(applicatio
             }
             return
         }
-        viewModelScope.launch {
+        catalogJob?.cancel()
+        catalogJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(isLoadingCatalog = true, apiKeyConfigured = true, errorMessage = null, warningMessage = null)
             }
@@ -208,7 +217,7 @@ class MapImagesViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _uiState.value
         val frames = leadTimes.mapNotNull { lead ->
             state.frames.firstOrNull { it.layerId == state.selectedLayerId && it.leadTimeHours == lead }
-        }
+        }.let { MapImagesUtils.prioritizeFrames(it, state.selectedLeadTimeHours) }
         if (frames.isEmpty()) return
         val key = preferences.getMapImagesApiKey()
         val alreadyCached = frames.count { bitmapCache.containsKey(cacheKey(state, it.layerId, it.leadTimeHours)) }
@@ -226,7 +235,9 @@ class MapImagesViewModel(application: Application) : AndroidViewModel(applicatio
         if (alreadyCached == frames.size) return
 
         preloadJob = viewModelScope.launch {
-            val semaphore = Semaphore(4)
+            // Two streams are enough to keep nearby frames arriving promptly without
+            // flooding the image-rendering endpoint with a full day's requests.
+            val semaphore = Semaphore(2)
             frames.map { frame ->
                 async {
                     val cacheKey = cacheKey(state, frame.layerId, frame.leadTimeHours)

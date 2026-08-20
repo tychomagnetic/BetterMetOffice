@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.model.MapImageFile
+import com.example.data.model.MapFrame
 import com.example.data.util.MapImagesUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -25,6 +26,14 @@ class MapImagesUtilsTest {
     }
 
     @Test
+    fun `cached run must reach current boundary to be fresh`() {
+        val noonBoundary = Instant.parse("2026-08-19T12:00:00Z").toEpochMilli()
+
+        assertTrue(MapImagesUtils.runMeetsBoundary("2026-08-19T12:00:00Z", noonBoundary))
+        assertTrue(!MapImagesUtils.runMeetsBoundary("2026-08-19T00:00:00Z", noonBoundary))
+    }
+
+    @Test
     fun `parser keeps immutable files from newest run and ignores moving aliases`() {
         val files = listOf(
             MapImageFile("total_precipitation_rate_ts24_2026081900", "2026-08-19T00:00:00Z", "00"),
@@ -39,5 +48,16 @@ class MapImagesUtilsTest {
         assertTrue(frames.all { it.runDateTime == "2026-08-19T12:00:00Z" })
         assertEquals(24, frames.first { it.layerId == "total_precipitation_rate" }.leadTimeHours)
         assertEquals(168, frames.first { it.layerId == "cloud_amount_total" }.leadTimeHours)
+    }
+
+    @Test
+    fun `preload order starts with selected frame then nearest neighbours`() {
+        val frames = listOf(0, 1, 2, 3, 4, 5).map { lead ->
+            MapFrame("rain_ts${lead}_2026081912", "rain", lead, "2026-08-19T12:00:00Z")
+        }
+
+        val ordered = MapImagesUtils.prioritizeFrames(frames, selectedLeadTimeHours = 3)
+
+        assertEquals(listOf(3, 2, 4, 1, 5, 0), ordered.map { it.leadTimeHours })
     }
 }

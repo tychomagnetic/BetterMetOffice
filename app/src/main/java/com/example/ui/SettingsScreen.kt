@@ -138,6 +138,7 @@ fun SettingsScreen(
     var isMapImagesApiKeyVisible by remember { mutableStateOf(false) }
     var isSecretVisible by remember { mutableStateOf(false) }
     var isHelpExpanded by remember { mutableStateOf(false) }
+    var apiSettingsOpen by remember { mutableStateOf(false) }
     var widgetLocationPermissionGranted by remember {
         mutableStateOf(WidgetLocationHelper.hasLocationPermission(context))
     }
@@ -165,7 +166,7 @@ fun SettingsScreen(
     }
 
     BackHandler {
-        onBack()
+        if (apiSettingsOpen) apiSettingsOpen = false else onBack()
     }
 
     Scaffold(
@@ -174,7 +175,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Settings & Sources",
+                        text = if (apiSettingsOpen) "Forecast Data & APIs" else "Settings",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             color = BentoTextPrimary
@@ -183,7 +184,9 @@ fun SettingsScreen(
                 },
                 navigationIcon = {
                     IconButton(
-                        onClick = onBack,
+                        onClick = {
+                            if (apiSettingsOpen) apiSettingsOpen = false else onBack()
+                        },
                         modifier = Modifier.testTag("settings_back_button")
                     ) {
                         Icon(
@@ -212,6 +215,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
+            if (apiSettingsOpen) {
             // Section 1: Active Data Source Selection
             SettingsCard(
                 title = "Data Source Selection",
@@ -253,46 +257,27 @@ fun SettingsScreen(
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Met Office DataHub API",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = BentoTextPrimary
-                                    )
+                            Text(
+                                text = "Met Office DataHub API",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = BentoTextPrimary
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                if (hasApiKey) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = Color(0xFFE8F5E9)
-                                    ) {
-                                        Text(
-                                            text = "Key Set",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                color = Color(0xFF2E7D32),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 9.5.sp
-                                            ),
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                } else {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = Color(0xFFFFF3E0)
-                                    ) {
-                                        Text(
-                                            text = "Key Needed",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                color = Color(0xFFE65100),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 9.5.sp
-                                            ),
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (hasApiKey) Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
+                                modifier = Modifier.padding(vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = if (hasApiKey) "API key configured" else "API key required",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (hasApiKey) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
                             }
                             Text(
                                 text = "Official UK Site-Specific 1-hourly & 3-hourly forecast models",
@@ -337,21 +322,19 @@ fun SettingsScreen(
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Met Office BPF Advanced Model",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = BentoTextPrimary)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (hasBpfApiKey) "Key Set" else "Key Needed",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = if (hasBpfApiKey) Color(0xFF2E7D32) else Color(0xFFE65100),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 9.5.sp
-                                    )
-                                )
-                            }
+                            Text(
+                                text = "Met Office BPF Advanced Model",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = BentoTextPrimary)
+                            )
+                            Text(
+                                text = if (hasBpfApiKey) "API key configured" else "API key required",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (hasBpfApiKey) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                ),
+                                modifier = Modifier.padding(vertical = 3.dp)
+                            )
                             Text(
                                 text = "Higher-resolution probabilistic forecast. Fresh results are cached per location for two hours; Refresh always forces a new pull. The widget remains on Spot.",
                                 style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 12.sp)
@@ -968,6 +951,22 @@ fun SettingsScreen(
                 Text(
                     "The app discovers your PNG order automatically. It checks metadata after the 00:00 and 12:00 UTC run boundaries and caches downloaded frames.",
                     style = MaterialTheme.typography.bodySmall.copy(color = BentoTextSecondary, fontSize = 11.sp)
+                )
+            }
+
+            } else {
+                val activeSourceName = when (uiState.forecastSource) {
+                    ForecastSource.MET_OFFICE_SPOT -> "Met Office Spot"
+                    ForecastSource.MET_OFFICE_BPF -> "Met Office BPF Advanced Model"
+                    ForecastSource.OPEN_METEO -> "Open-Meteo"
+                }
+                SettingsNavigationCard(
+                    title = "Forecast data & API keys",
+                    subtitle = "Active source: $activeSourceName",
+                    supportingText = "Choose the forecast source and manage the Spot, BPF and Weather Map API credentials.",
+                    icon = Icons.Default.Key,
+                    onClick = { apiSettingsOpen = true },
+                    modifier = Modifier.testTag("open_api_settings")
                 )
             }
 

@@ -16,6 +16,9 @@ object MapImagesUtils {
             .toInstant().toEpochMilli()
     }
 
+    fun runMeetsBoundary(runDateTime: String, boundaryMillis: Long): Boolean =
+        runCatching { Instant.parse(runDateTime).toEpochMilli() >= boundaryMillis }.getOrDefault(false)
+
     fun newestImmutableFrames(files: List<MapImageFile>): List<MapFrame> {
         val newestRun = files.mapNotNull { runCatching { Instant.parse(it.runDateTime) }.getOrNull() }.maxOrNull()
             ?: return emptyList()
@@ -33,4 +36,11 @@ object MapImagesUtils {
 
     fun forecastTimeMillis(frame: MapFrame): Long =
         Instant.parse(frame.runDateTime).plusSeconds(frame.leadTimeHours * 3600L).toEpochMilli()
+
+    /** Puts the visible frame first, then fans out to its nearest neighbours. */
+    fun prioritizeFrames(frames: List<MapFrame>, selectedLeadTimeHours: Int): List<MapFrame> =
+        frames.sortedWith(
+            compareBy<MapFrame> { kotlin.math.abs(it.leadTimeHours - selectedLeadTimeHours) }
+                .thenBy { it.leadTimeHours }
+        )
 }

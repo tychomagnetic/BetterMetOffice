@@ -80,7 +80,7 @@ fun MapImagesScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { viewModel.loadCatalog() }
+    LaunchedEffect(Unit) { viewModel.onScreenEntered() }
     BackHandler(onBack = onBack)
 
     Scaffold(

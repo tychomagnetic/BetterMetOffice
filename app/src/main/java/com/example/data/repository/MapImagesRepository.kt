@@ -11,6 +11,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -55,6 +56,7 @@ class MapImagesRepository(
         val wantedOrder = requestedOrderId?.takeIf { it.isNotBlank() }
             ?: preferences.getSelectedMapOrderId().takeIf { it.isNotBlank() }
         if (!forceRefresh && cached != null && cached.checkedBoundaryMillis == boundary &&
+            MapImagesUtils.runMeetsBoundary(cached.runDateTime, boundary) &&
             cached.frames.isNotEmpty() && (wantedOrder == null || cached.orderId == wantedOrder)
         ) {
             return@withContext MapCatalogResult(cached)
@@ -83,7 +85,13 @@ class MapImagesRepository(
             )
             preferences.setSelectedMapOrderId(order.orderId)
             preferences.setMapManifestCache(catalog)
-            MapCatalogResult(catalog)
+            val latestRunPending = !MapImagesUtils.runMeetsBoundary(catalog.runDateTime, boundary)
+            MapCatalogResult(
+                catalog,
+                warning = if (latestRunPending) {
+                    "The latest 00:00/12:00 UTC map run is not available yet. It will be checked again next time you open Weather Maps."
+                } else null
+            )
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             if (cached != null && cached.frames.isNotEmpty() && (wantedOrder == null || cached.orderId == wantedOrder)) {
@@ -99,20 +107,43 @@ class MapImagesRepository(
         val cacheFile = File(imageCacheDirectory, "${orderId}_${safeName}_land_legend.png")
         if (cacheFile.isFile && cacheFile.length() > 0) return@withContext cacheFile.readBytes()
 
-        val response = api.getImage(orderId, fileId, apiKey = apiKey.trim())
-        if (!response.isSuccessful) error("Map image request failed (HTTP ${response.code()}).")
-        val bytes = response.body()?.bytes() ?: error("Map image response was empty.")
-        if (bytes.size < 8 || bytes[0] != 0x89.toByte() || bytes[1] != 0x50.toByte()) {
-            error("Map image response was not a PNG.")
+        var attempt = 0
+        while (true) {
+            val response = api.getImage(orderId, fileId, apiKey = apiKey.trim())
+            if (response.isSuccessful) {
+                val bytes = response.body()?.bytes() ?: error("Map image response was empty.")
+                if (bytes.size < 8 || bytes[0] != 0x89.toByte() || bytes[1] != 0x50.toByte()) {
+                    error("Map image response was not a PNG.")
+                }
+                cacheFile.writeBytes(bytes)
+                return@withContext bytes
+            }
+
+            response.errorBody()?.close()
+            val retryAfterMillis = response.headers()["Retry-After"]
+                ?.toLongOrNull()
+                ?.coerceIn(1L, 60L)
+                ?.times(1_000L)
+            val retryableGatewayError = response.code() in setOf(502, 503, 504)
+            val retryableRateLimit = response.code() == 429 && retryAfterMillis != null
+            if (attempt >= MAX_IMAGE_RETRIES || (!retryableGatewayError && !retryableRateLimit)) {
+                error("Map image request failed (HTTP ${response.code()}).")
+            }
+
+            val backoffMillis = retryAfterMillis ?: (1_000L shl attempt)
+            attempt++
+            delay(backoffMillis)
         }
-        cacheFile.writeBytes(bytes)
-        bytes
+        @Suppress("UNREACHABLE_CODE")
+        error("Map image retry loop ended unexpectedly.")
     }
 
     private fun MapOrder.isCompatiblePngOrder(): Boolean =
         format.equals("PNG", ignoreCase = true) && orderId.isNotBlank()
 
     companion object {
+        private const val MAX_IMAGE_RETRIES = 2
+
         private fun createApi(): MetOfficeMapImagesApiService {
             val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
             val client = OkHttpClient.Builder()
